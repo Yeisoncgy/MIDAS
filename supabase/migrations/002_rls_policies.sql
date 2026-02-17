@@ -5,15 +5,11 @@
 -- ============================================================================
 
 -- ============================================================================
--- FUNCIÓN AUXILIAR PARA OBTENER EL ROL DEL USUARIO AUTENTICADO
+-- FUNCIONES AUXILIARES EN ESQUEMA PUBLIC
 -- ============================================================================
 
--- Crear el esquema auth si no existe (Supabase lo crea automáticamente,
--- pero esto previene errores en entornos de prueba)
-CREATE SCHEMA IF NOT EXISTS auth;
-
--- Función que obtiene el rol del usuario autenticado desde public.users
-CREATE OR REPLACE FUNCTION auth.user_role()
+-- Obtiene el rol del usuario logueado
+CREATE OR REPLACE FUNCTION public.get_user_role()
 RETURNS user_role
 LANGUAGE sql
 STABLE
@@ -25,10 +21,8 @@ AS $$
     WHERE id = auth.uid();
 $$;
 
-COMMENT ON FUNCTION auth.user_role() IS 'Obtiene el rol del usuario autenticado desde la tabla public.users';
-
--- Función auxiliar para verificar si el usuario tiene permiso en un módulo específico
-CREATE OR REPLACE FUNCTION auth.has_module_permission(module_name TEXT)
+-- Verifica si el usuario tiene permiso en un módulo
+CREATE OR REPLACE FUNCTION public.has_module_permission(module_name TEXT)
 RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
@@ -39,11 +33,9 @@ AS $$
         (SELECT (module_permissions ->> module_name)::boolean
          FROM public.users
          WHERE id = auth.uid()),
-        TRUE  -- Por defecto se permite el acceso si no hay restricción explícita
+        TRUE
     );
 $$;
-
-COMMENT ON FUNCTION auth.has_module_permission(TEXT) IS 'Verifica si el usuario autenticado tiene permiso para acceder a un módulo específico';
 
 -- ============================================================================
 -- HABILITAR RLS EN TODAS LAS TABLAS
@@ -83,24 +75,24 @@ ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
 -- Admin: acceso total a usuarios
 CREATE POLICY admin_all_users ON users
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 -- Socio: acceso total a usuarios si tiene permiso del módulo
 CREATE POLICY socio_all_users ON users
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('usuarios'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('usuarios'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('usuarios'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('usuarios'));
 
 -- Contador: solo lectura de usuarios
 CREATE POLICY contador_select_users ON users
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- Vendedor: solo puede ver su propio perfil
 CREATE POLICY vendedor_select_own_user ON users
     FOR SELECT
-    USING (auth.user_role() = 'vendedor' AND id = auth.uid());
+    USING (public.get_user_role() = 'vendedor' AND id = auth.uid());
 
 -- ============================================================================
 -- POLÍTICAS PARA: products
@@ -111,21 +103,21 @@ CREATE POLICY vendedor_select_own_user ON users
 
 CREATE POLICY admin_all_products ON products
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_products ON products
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('productos'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('productos'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('productos'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('productos'));
 
 CREATE POLICY contador_select_products ON products
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 CREATE POLICY vendedor_select_products ON products
     FOR SELECT
-    USING (auth.user_role() = 'vendedor');
+    USING (public.get_user_role() = 'vendedor');
 
 -- ============================================================================
 -- POLÍTICAS PARA: product_variants
@@ -136,21 +128,21 @@ CREATE POLICY vendedor_select_products ON products
 
 CREATE POLICY admin_all_product_variants ON product_variants
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_product_variants ON product_variants
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('productos'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('productos'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('productos'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('productos'));
 
 CREATE POLICY contador_select_product_variants ON product_variants
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 CREATE POLICY vendedor_select_product_variants ON product_variants
     FOR SELECT
-    USING (auth.user_role() = 'vendedor');
+    USING (public.get_user_role() = 'vendedor');
 
 -- ============================================================================
 -- POLÍTICAS PARA: clients
@@ -161,23 +153,23 @@ CREATE POLICY vendedor_select_product_variants ON product_variants
 
 CREATE POLICY admin_all_clients ON clients
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_clients ON clients
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('clientes'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('clientes'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('clientes'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('clientes'));
 
 -- Vendedor: puede ver todos los clientes
 CREATE POLICY vendedor_select_clients ON clients
     FOR SELECT
-    USING (auth.user_role() = 'vendedor');
+    USING (public.get_user_role() = 'vendedor');
 
 -- Vendedor: puede crear nuevos clientes
 CREATE POLICY vendedor_insert_clients ON clients
     FOR INSERT
-    WITH CHECK (auth.user_role() = 'vendedor');
+    WITH CHECK (public.get_user_role() = 'vendedor');
 
 -- ============================================================================
 -- POLÍTICAS PARA: sales
@@ -188,27 +180,27 @@ CREATE POLICY vendedor_insert_clients ON clients
 
 CREATE POLICY admin_all_sales ON sales
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_sales ON sales
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('ventas'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('ventas'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('ventas'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('ventas'));
 
 CREATE POLICY contador_select_sales ON sales
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- Vendedor: puede ver todas las ventas
 CREATE POLICY vendedor_select_sales ON sales
     FOR SELECT
-    USING (auth.user_role() = 'vendedor');
+    USING (public.get_user_role() = 'vendedor');
 
 -- Vendedor: puede registrar nuevas ventas
 CREATE POLICY vendedor_insert_sales ON sales
     FOR INSERT
-    WITH CHECK (auth.user_role() = 'vendedor');
+    WITH CHECK (public.get_user_role() = 'vendedor');
 
 -- ============================================================================
 -- POLÍTICAS PARA: sale_items
@@ -219,27 +211,27 @@ CREATE POLICY vendedor_insert_sales ON sales
 
 CREATE POLICY admin_all_sale_items ON sale_items
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_sale_items ON sale_items
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('ventas'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('ventas'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('ventas'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('ventas'));
 
 CREATE POLICY contador_select_sale_items ON sale_items
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- Vendedor: puede ver ítems de venta
 CREATE POLICY vendedor_select_sale_items ON sale_items
     FOR SELECT
-    USING (auth.user_role() = 'vendedor');
+    USING (public.get_user_role() = 'vendedor');
 
 -- Vendedor: puede agregar ítems a ventas
 CREATE POLICY vendedor_insert_sale_items ON sale_items
     FOR INSERT
-    WITH CHECK (auth.user_role() = 'vendedor');
+    WITH CHECK (public.get_user_role() = 'vendedor');
 
 -- ============================================================================
 -- POLÍTICAS PARA: invoices
@@ -250,21 +242,21 @@ CREATE POLICY vendedor_insert_sale_items ON sale_items
 
 CREATE POLICY admin_all_invoices ON invoices
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_invoices ON invoices
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('ventas'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('ventas'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('ventas'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('ventas'));
 
 CREATE POLICY contador_select_invoices ON invoices
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 CREATE POLICY vendedor_select_invoices ON invoices
     FOR SELECT
-    USING (auth.user_role() = 'vendedor');
+    USING (public.get_user_role() = 'vendedor');
 
 -- ============================================================================
 -- POLÍTICAS PARA: expense_categories
@@ -275,17 +267,17 @@ CREATE POLICY vendedor_select_invoices ON invoices
 
 CREATE POLICY admin_all_expense_categories ON expense_categories
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_expense_categories ON expense_categories
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('gastos'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('gastos'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('gastos'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('gastos'));
 
 CREATE POLICY contador_select_expense_categories ON expense_categories
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: expenses
@@ -296,17 +288,17 @@ CREATE POLICY contador_select_expense_categories ON expense_categories
 
 CREATE POLICY admin_all_expenses ON expenses
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_expenses ON expenses
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('gastos'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('gastos'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('gastos'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('gastos'));
 
 CREATE POLICY contador_select_expenses ON expenses
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: suppliers
@@ -317,17 +309,17 @@ CREATE POLICY contador_select_expenses ON expenses
 
 CREATE POLICY admin_all_suppliers ON suppliers
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_suppliers ON suppliers
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('proveedores'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('proveedores'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('proveedores'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('proveedores'));
 
 CREATE POLICY contador_select_suppliers ON suppliers
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: inventory_movements
@@ -338,18 +330,18 @@ CREATE POLICY contador_select_suppliers ON suppliers
 
 CREATE POLICY admin_all_inventory_movements ON inventory_movements
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_inventory_movements ON inventory_movements
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('inventario'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('inventario'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('inventario'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('inventario'));
 
 -- Vendedor: solo puede ver movimientos de inventario (sin crear)
 CREATE POLICY vendedor_select_inventory_movements ON inventory_movements
     FOR SELECT
-    USING (auth.user_role() = 'vendedor');
+    USING (public.get_user_role() = 'vendedor');
 
 -- ============================================================================
 -- POLÍTICAS PARA: cash_bank_accounts
@@ -360,17 +352,17 @@ CREATE POLICY vendedor_select_inventory_movements ON inventory_movements
 
 CREATE POLICY admin_all_cash_bank_accounts ON cash_bank_accounts
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_cash_bank_accounts ON cash_bank_accounts
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('caja'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('caja'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('caja'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('caja'));
 
 CREATE POLICY contador_select_cash_bank_accounts ON cash_bank_accounts
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: cash_bank_movements
@@ -381,17 +373,17 @@ CREATE POLICY contador_select_cash_bank_accounts ON cash_bank_accounts
 
 CREATE POLICY admin_all_cash_bank_movements ON cash_bank_movements
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_cash_bank_movements ON cash_bank_movements
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('caja'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('caja'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('caja'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('caja'));
 
 CREATE POLICY contador_select_cash_bank_movements ON cash_bank_movements
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: accounts_receivable
@@ -402,17 +394,17 @@ CREATE POLICY contador_select_cash_bank_movements ON cash_bank_movements
 
 CREATE POLICY admin_all_accounts_receivable ON accounts_receivable
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_accounts_receivable ON accounts_receivable
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('cuentas'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('cuentas'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('cuentas'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('cuentas'));
 
 CREATE POLICY contador_select_accounts_receivable ON accounts_receivable
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: accounts_payable
@@ -423,17 +415,17 @@ CREATE POLICY contador_select_accounts_receivable ON accounts_receivable
 
 CREATE POLICY admin_all_accounts_payable ON accounts_payable
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_accounts_payable ON accounts_payable
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('cuentas'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('cuentas'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('cuentas'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('cuentas'));
 
 CREATE POLICY contador_select_accounts_payable ON accounts_payable
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: payment_records
@@ -444,17 +436,17 @@ CREATE POLICY contador_select_accounts_payable ON accounts_payable
 
 CREATE POLICY admin_all_payment_records ON payment_records
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_payment_records ON payment_records
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('cuentas'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('cuentas'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('cuentas'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('cuentas'));
 
 CREATE POLICY contador_select_payment_records ON payment_records
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: partners
@@ -465,17 +457,17 @@ CREATE POLICY contador_select_payment_records ON payment_records
 
 CREATE POLICY admin_all_partners ON partners
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_partners ON partners
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('socios'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('socios'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('socios'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('socios'));
 
 CREATE POLICY contador_select_partners ON partners
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: partner_withdrawals
@@ -486,17 +478,17 @@ CREATE POLICY contador_select_partners ON partners
 
 CREATE POLICY admin_all_partner_withdrawals ON partner_withdrawals
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_partner_withdrawals ON partner_withdrawals
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('socios'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('socios'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('socios'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('socios'));
 
 CREATE POLICY contador_select_partner_withdrawals ON partner_withdrawals
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: subscriptions
@@ -507,17 +499,17 @@ CREATE POLICY contador_select_partner_withdrawals ON partner_withdrawals
 
 CREATE POLICY admin_all_subscriptions ON subscriptions
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_subscriptions ON subscriptions
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('suscripciones'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('suscripciones'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('suscripciones'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('suscripciones'));
 
 CREATE POLICY contador_select_subscriptions ON subscriptions
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- POLÍTICAS PARA: campaigns
@@ -528,13 +520,13 @@ CREATE POLICY contador_select_subscriptions ON subscriptions
 
 CREATE POLICY admin_all_campaigns ON campaigns
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_all_campaigns ON campaigns
     FOR ALL
-    USING (auth.user_role() = 'socio' AND auth.has_module_permission('campanas'))
-    WITH CHECK (auth.user_role() = 'socio' AND auth.has_module_permission('campanas'));
+    USING (public.get_user_role() = 'socio' AND public.has_module_permission('campanas'))
+    WITH CHECK (public.get_user_role() = 'socio' AND public.has_module_permission('campanas'));
 
 -- ============================================================================
 -- POLÍTICAS PARA: activity_log
@@ -546,12 +538,12 @@ CREATE POLICY socio_all_campaigns ON campaigns
 
 CREATE POLICY admin_all_activity_log ON activity_log
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_select_activity_log ON activity_log
     FOR SELECT
-    USING (auth.user_role() = 'socio');
+    USING (public.get_user_role() = 'socio');
 
 -- Política para permitir inserciones del sistema (funciones con SECURITY DEFINER)
 -- Las funciones que registran actividad se ejecutan como superusuario
@@ -569,16 +561,16 @@ CREATE POLICY system_insert_activity_log ON activity_log
 
 CREATE POLICY admin_all_settings ON settings
     FOR ALL
-    USING (auth.user_role() = 'admin')
-    WITH CHECK (auth.user_role() = 'admin');
+    USING (public.get_user_role() = 'admin')
+    WITH CHECK (public.get_user_role() = 'admin');
 
 CREATE POLICY socio_select_settings ON settings
     FOR SELECT
-    USING (auth.user_role() = 'socio');
+    USING (public.get_user_role() = 'socio');
 
 CREATE POLICY contador_select_settings ON settings
     FOR SELECT
-    USING (auth.user_role() = 'contador');
+    USING (public.get_user_role() = 'contador');
 
 -- ============================================================================
 -- FIN DE LA MIGRACIÓN 002

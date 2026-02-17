@@ -9,25 +9,25 @@
 -- Categorías predeterminadas para clasificar los gastos del negocio
 -- ============================================================================
 
-INSERT INTO expense_categories (id, name, icon, color, is_default, is_active, sort_order) VALUES
-    (gen_random_uuid(), 'Producción',                'factory',       '#8B5CF6', TRUE, TRUE, 1),
-    (gen_random_uuid(), 'Packaging',                  'package',       '#F59E0B', TRUE, TRUE, 2),
-    (gen_random_uuid(), 'Herramientas y suscripciones', 'wrench',      '#3B82F6', TRUE, TRUE, 3),
-    (gen_random_uuid(), 'Pautas publicitarias',       'megaphone',     '#EF4444', TRUE, TRUE, 4),
-    (gen_random_uuid(), 'Envíos y logística',         'truck',         '#10B981', TRUE, TRUE, 5),
-    (gen_random_uuid(), 'Operación',                  'settings',      '#6366F1', TRUE, TRUE, 6),
-    (gen_random_uuid(), 'Otros',                      'more-horizontal','#9CA3AF', TRUE, TRUE, 7);
+INSERT INTO expense_categories (name, icon, color, is_default, is_active, sort_order) VALUES
+    ('Producción',                'factory',       '#8B5CF6', TRUE, TRUE, 1),
+    ('Packaging',                  'package',       '#F59E0B', TRUE, TRUE, 2),
+    ('Herramientas y suscripciones', 'wrench',      '#3B82F6', TRUE, TRUE, 3),
+    ('Pautas publicitarias',       'megaphone',     '#EF4444', TRUE, TRUE, 4),
+    ('Envíos y logística',         'truck',         '#10B981', TRUE, TRUE, 5),
+    ('Operación',                  'settings',      '#6366F1', TRUE, TRUE, 6),
+    ('Otros',                      'more-horizontal','#9CA3AF', TRUE, TRUE, 7);
 
 -- ============================================================================
 -- CUENTAS DE CAJA Y BANCOS
 -- Cuentas financieras iniciales del negocio con saldo en cero
 -- ============================================================================
 
-INSERT INTO cash_bank_accounts (id, name, type, balance, is_active) VALUES
-    (gen_random_uuid(), 'Efectivo',    'cash',    0, TRUE),
-    (gen_random_uuid(), 'Bancolombia', 'bank',    0, TRUE),
-    (gen_random_uuid(), 'Nequi',       'digital', 0, TRUE),
-    (gen_random_uuid(), 'Daviplata',   'digital', 0, TRUE);
+INSERT INTO cash_bank_accounts (name, type, balance, is_active) VALUES
+    ('Efectivo',    'cash',    0, TRUE),
+    ('Bancolombia', 'bank',    0, TRUE),
+    ('Nequi',       'digital', 0, TRUE),
+    ('Daviplata',   'digital', 0, TRUE);
 
 -- ============================================================================
 -- PRODUCTOS Y VARIANTES
@@ -144,26 +144,25 @@ END $$;
 -- Valores iniciales de configuración global
 -- ============================================================================
 
-INSERT INTO settings (id, key, value) VALUES
+INSERT INTO settings (key, value) VALUES
     -- Prefijo para números de factura
-    (gen_random_uuid(), 'invoice_prefix',        '{"value": "ART-"}'),
+    ('invoice_prefix',        '{"value": "ART-"}'),
     -- Contador secuencial de facturas (inicia en 0, se incrementa automáticamente)
-    (gen_random_uuid(), 'invoice_counter',        '{"value": 0}'),
+    ('invoice_counter',        '{"value": 0}'),
     -- Nombre de la empresa
-    (gen_random_uuid(), 'company_name',           '{"value": "Casa Artemisa"}'),
+    ('company_name',           '{"value": "Casa Artemisa"}'),
     -- NIT de la empresa (vacío hasta que se registre)
-    (gen_random_uuid(), 'company_nit',            '{"value": ""}'),
+    ('company_nit',            '{"value": ""}'),
     -- Ancho del rollo de impresora térmica
-    (gen_random_uuid(), 'thermal_printer_width',  '{"value": "80mm"}');
+    ('thermal_printer_width',  '{"value": "80mm"}');
 
 -- ============================================================================
 -- SUSCRIPCIONES
 -- Herramientas y servicios digitales con pagos recurrentes
 -- ============================================================================
 
-INSERT INTO subscriptions (id, tool_name, monthly_cost, currency, billing_cycle, start_date, next_renewal_date, status, category, notes) VALUES
+INSERT INTO subscriptions (tool_name, monthly_cost, currency, billing_cycle, start_date, next_renewal_date, status, category, notes) VALUES
     (
-        gen_random_uuid(),
         'Midjourney',
         72000,
         'COP',
@@ -175,7 +174,6 @@ INSERT INTO subscriptions (id, tool_name, monthly_cost, currency, billing_cycle,
         'Plan Standard para generación de imágenes con IA'
     ),
     (
-        gen_random_uuid(),
         'Claude Pro',
         80000,
         'COP',
@@ -187,7 +185,6 @@ INSERT INTO subscriptions (id, tool_name, monthly_cost, currency, billing_cycle,
         'Asistente de IA para redacción, análisis y automatización'
     ),
     (
-        gen_random_uuid(),
         'Canva Pro',
         55000,
         'COP',
@@ -199,7 +196,6 @@ INSERT INTO subscriptions (id, tool_name, monthly_cost, currency, billing_cycle,
         'Herramienta de diseño gráfico para redes sociales y marketing'
     ),
     (
-        gen_random_uuid(),
         'Adobe Creative Cloud',
         120000,
         'COP',
@@ -211,7 +207,6 @@ INSERT INTO subscriptions (id, tool_name, monthly_cost, currency, billing_cycle,
         'Suite de diseño profesional (Photoshop, Illustrator, etc.)'
     ),
     (
-        gen_random_uuid(),
         'Hosting Web',
         45000,
         'COP',

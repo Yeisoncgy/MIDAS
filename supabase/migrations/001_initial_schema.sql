@@ -94,8 +94,8 @@ CREATE TABLE products (
     name        TEXT NOT NULL,
     description TEXT,
     category    TEXT NOT NULL DEFAULT 'Camisetas',
-    base_price  NUMERIC(12, 2) NOT NULL,
-    base_cost   NUMERIC(12, 2) NOT NULL,
+    base_price  NUMERIC(12, 2) NOT NULL CHECK (base_price >= 0),
+    base_cost   NUMERIC(12, 2) NOT NULL CHECK (base_cost >= 0),
     sku         TEXT UNIQUE NOT NULL,
     is_active   BOOLEAN NOT NULL DEFAULT TRUE,
     image_url   TEXT,
@@ -117,7 +117,7 @@ CREATE TABLE product_variants (
     size            TEXT NOT NULL,
     cut             TEXT NOT NULL,
     stock           INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
-    min_stock_alert INTEGER NOT NULL DEFAULT 5,
+    min_stock_alert INTEGER NOT NULL DEFAULT 5 CHECK (min_stock_alert >= 0),
     cost_per_unit   NUMERIC(12, 2) NOT NULL,
     sku_variant     TEXT UNIQUE NOT NULL,
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
@@ -143,8 +143,8 @@ CREATE TABLE clients (
     email               TEXT,
     address             TEXT,
     neighborhood        TEXT,
-    city                TEXT,
-    department          TEXT,
+    city                TEXT NOT NULL DEFAULT 'Bogotá',
+    department          TEXT NOT NULL DEFAULT 'Cundinamarca',
     postal_code         TEXT,
     birth_date          DATE,
     gender              TEXT,
@@ -156,6 +156,7 @@ CREATE TABLE clients (
     -- Etiquetas para segmentación
     tags                TEXT[] NOT NULL DEFAULT '{}',
     notes               TEXT,
+    is_active           BOOLEAN NOT NULL DEFAULT TRUE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -194,13 +195,13 @@ CREATE TABLE campaigns (
     objective          campaign_objective NOT NULL,
     status             campaign_status NOT NULL DEFAULT 'active',
     -- Métricas de rendimiento
-    reach              INTEGER,
-    impressions        INTEGER,
-    clicks             INTEGER,
-    messages_received  INTEGER,
+    reach              INTEGER DEFAULT 0,
+    impressions        INTEGER DEFAULT 0,
+    clicks             INTEGER DEFAULT 0,
+    messages_received  INTEGER DEFAULT 0,
     cost_per_message   NUMERIC(10, 2),
-    sales_attributed   INTEGER,
-    revenue_generated  NUMERIC(14, 2),
+    sales_attributed   INTEGER DEFAULT 0,
+    revenue_generated  NUMERIC(14, 2) DEFAULT 0,
     roi                NUMERIC(8, 2),
     cac                NUMERIC(10, 2),
     notes              TEXT,
@@ -221,17 +222,18 @@ CREATE TABLE sales (
     invoice_number     TEXT UNIQUE NOT NULL,
     client_id          UUID REFERENCES clients(id),
     sale_date          DATE NOT NULL DEFAULT CURRENT_DATE,
-    subtotal           NUMERIC(12, 2) NOT NULL,
+    subtotal           NUMERIC(12, 2) NOT NULL CHECK (subtotal >= 0),
     discount_type      discount_type,
-    discount_value     NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    shipping_cost      NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    total              NUMERIC(12, 2) NOT NULL,
+    discount_value     NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (discount_value >= 0),
+    shipping_cost      NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (shipping_cost >= 0),
+    total              NUMERIC(12, 2) NOT NULL CHECK (total >= 0),
     payment_method     payment_method_type NOT NULL,
     payment_account_id UUID REFERENCES cash_bank_accounts(id),
     sale_channel       sale_channel_type NOT NULL,
     seller_user_id     UUID REFERENCES users(id),
     status             sale_status NOT NULL DEFAULT 'pending',
     shipping_address   TEXT,
+    tracking_number    TEXT,
     notes              TEXT,
     campaign_id        UUID REFERENCES campaigns(id),
     created_by         UUID NOT NULL REFERENCES users(id),
@@ -251,8 +253,8 @@ CREATE TABLE sale_items (
     sale_id            UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
     product_variant_id UUID NOT NULL REFERENCES product_variants(id),
     quantity           INTEGER NOT NULL CHECK (quantity > 0),
-    unit_price         NUMERIC(12, 2) NOT NULL,
-    subtotal           NUMERIC(12, 2) NOT NULL,
+    unit_price         NUMERIC(12, 2) NOT NULL CHECK (unit_price >= 0),
+    subtotal           NUMERIC(12, 2) NOT NULL CHECK (subtotal >= 0),
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -303,6 +305,7 @@ CREATE TABLE suppliers (
     email               TEXT,
     supplies_description TEXT,
     notes               TEXT,
+    is_active           BOOLEAN NOT NULL DEFAULT TRUE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -325,6 +328,7 @@ CREATE TABLE expenses (
     supplier_invoice_number TEXT,
     receipt_image_url       TEXT,
     notes                   TEXT,
+    is_recurring            BOOLEAN NOT NULL DEFAULT FALSE,
     registered_by           UUID NOT NULL REFERENCES users(id),
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -384,9 +388,9 @@ CREATE TABLE accounts_receivable (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id        UUID NOT NULL REFERENCES clients(id),
     sale_id          UUID NOT NULL REFERENCES sales(id),
-    total_amount     NUMERIC(12, 2) NOT NULL,
-    paid_amount      NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    remaining_amount NUMERIC(12, 2) NOT NULL,
+    total_amount     NUMERIC(12, 2) NOT NULL CHECK (total_amount > 0),
+    paid_amount      NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+    remaining_amount NUMERIC(12, 2) NOT NULL CHECK (remaining_amount >= 0),
     due_date         DATE,
     status           account_status NOT NULL DEFAULT 'pending',
     notes            TEXT,
@@ -404,9 +408,9 @@ CREATE TABLE accounts_payable (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     supplier_id      UUID NOT NULL REFERENCES suppliers(id),
     expense_id       UUID REFERENCES expenses(id),
-    total_amount     NUMERIC(12, 2) NOT NULL,
-    paid_amount      NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    remaining_amount NUMERIC(12, 2) NOT NULL,
+    total_amount     NUMERIC(12, 2) NOT NULL CHECK (total_amount > 0),
+    paid_amount      NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+    remaining_amount NUMERIC(12, 2) NOT NULL CHECK (remaining_amount >= 0),
     due_date         DATE,
     status           account_status NOT NULL DEFAULT 'pending',
     notes            TEXT,
@@ -529,33 +533,49 @@ COMMENT ON TABLE settings IS 'Configuración global del sistema en formato clave
 -- Índices para la tabla de ventas (consultas frecuentes)
 CREATE INDEX idx_sales_invoice_number ON sales (invoice_number);
 CREATE INDEX idx_sales_client_id ON sales (client_id);
-CREATE INDEX idx_sales_sale_date ON sales (sale_date);
+CREATE INDEX idx_sales_sale_date ON sales (sale_date DESC);
 CREATE INDEX idx_sales_status ON sales (status);
 CREATE INDEX idx_sales_seller_user_id ON sales (seller_user_id);
+CREATE INDEX idx_sales_campaign_id ON sales (campaign_id) WHERE campaign_id IS NOT NULL;
+CREATE INDEX idx_sales_created_at ON sales (created_at DESC);
 
 -- Índices para la tabla de clientes (búsqueda rápida y fuzzy)
 CREATE INDEX idx_clients_cedula_nit ON clients (cedula_nit);
 CREATE INDEX idx_clients_phone_whatsapp ON clients (phone_whatsapp);
 -- Índice GIN con pg_trgm para búsqueda difusa por nombre
 CREATE INDEX idx_clients_full_name_trgm ON clients USING GIN (full_name gin_trgm_ops);
+CREATE INDEX idx_clients_city ON clients (city);
 
 -- Índices para la tabla de gastos
-CREATE INDEX idx_expenses_expense_date ON expenses (expense_date);
+CREATE INDEX idx_expenses_expense_date ON expenses (expense_date DESC);
 CREATE INDEX idx_expenses_category_id ON expenses (category_id);
 CREATE INDEX idx_expenses_supplier_id ON expenses (supplier_id);
 
 -- Índices para movimientos de inventario
 CREATE INDEX idx_inventory_movements_variant ON inventory_movements (product_variant_id);
-CREATE INDEX idx_inventory_movements_created ON inventory_movements (created_at);
+CREATE INDEX idx_inventory_movements_created ON inventory_movements (created_at DESC);
+CREATE INDEX idx_inventory_movements_type ON inventory_movements (movement_type);
 
 -- Índices para movimientos de caja/bancos
 CREATE INDEX idx_cash_bank_movements_account ON cash_bank_movements (account_id);
-CREATE INDEX idx_cash_bank_movements_created ON cash_bank_movements (created_at);
+CREATE INDEX idx_cash_bank_movements_created ON cash_bank_movements (created_at DESC);
 
 -- Índices para el registro de actividad (auditoría)
 CREATE INDEX idx_activity_log_user_id ON activity_log (user_id);
-CREATE INDEX idx_activity_log_created ON activity_log (created_at);
+CREATE INDEX idx_activity_log_created ON activity_log (created_at DESC);
 CREATE INDEX idx_activity_log_module ON activity_log (module);
+
+-- Índices para variantes de producto
+CREATE INDEX idx_product_variants_product_id ON product_variants (product_id);
+
+-- Índices para ítems de venta
+CREATE INDEX idx_sale_items_sale_id ON sale_items (sale_id);
+
+-- Índices para cuentas por cobrar
+CREATE INDEX idx_accounts_receivable_status ON accounts_receivable (status);
+
+-- Índices para cuentas por pagar
+CREATE INDEX idx_accounts_payable_status ON accounts_payable (status);
 
 -- Índices para campañas
 CREATE INDEX idx_campaigns_status ON campaigns (status);
