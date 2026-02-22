@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { Space_Grotesk, Sora } from "next/font/google"
 import { Toaster } from "@/components/ui/sonner"
+import { CookieConsent } from "@/components/shared/cookie-consent"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import "./globals.css"
 
@@ -41,6 +42,7 @@ export default function RootLayout({
             duration: 4000,
           }}
         />
+        <CookieConsent />
       </body>
     </html>
   )

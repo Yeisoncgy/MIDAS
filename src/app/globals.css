@@ -92,6 +92,12 @@
   --animate-fade-in: fade-in 0.2s ease;
   --animate-slide-in-right: slide-in-right 0.25s ease;
   --animate-shake: shake 0.2s ease;
+  --animate-slide-up: slide-up 0.4s ease-out;
+
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 
   @keyframes page-in {
     from { opacity: 0; transform: translateY(8px); }
