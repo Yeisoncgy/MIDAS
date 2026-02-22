@@ -47,40 +47,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     console.log("[Auth] Iniciando carga de sesion...")
     let mounted = true
 
-    async function init() {
-      try {
-        const { data: { user: authUser }, error } = await supabase.auth.getUser()
-        console.log("[Auth] getUser:", { email: authUser?.email, error: error?.message })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log("[Auth] AuthStateChange:", event, session?.user?.email)
 
-        if (authUser && mounted) {
-          const profile = await fetchProfile(authUser.id)
+        if (event === "SIGNED_OUT") {
+          setUser(null)
+          if (mounted) setLoading(false)
+          return
+        }
+
+        if (session?.user) {
+          const profile = await fetchProfile(session.user.id)
           if (profile && mounted) {
-            console.log("[Auth] Perfil OK:", profile.full_name)
+            console.log("[Auth] Perfil cargado:", profile.full_name)
             setUser(profile)
           }
         }
-      } catch (err) {
-        console.log("[Auth] Error:", err)
-      } finally {
+
         if (mounted) setLoading(false)
-      }
-    }
-
-    init()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log("[Auth] AuthStateChange:", event)
-        if (event === "SIGNED_OUT") {
-          setUser(null)
-          setLoading(false)
-          return
-        }
-        if (session?.user && event !== "INITIAL_SESSION") {
-          const profile = await fetchProfile(session.user.id)
-          if (profile && mounted) setUser(profile)
-          if (mounted) setLoading(false)
-        }
       }
     )
 
