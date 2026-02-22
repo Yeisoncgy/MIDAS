@@ -1,8 +1,8 @@
 "use client"
 
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useContext, useEffect, useState, useRef, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
-import type { User as AppUser, ModulePermissions, UserRole, ModuleName } from "@/lib/types"
+import type { User as AppUser, ModuleName } from "@/lib/types"
 
 interface AuthContextType {
   user: AppUser | null
@@ -20,51 +20,81 @@ const AuthContext = createContext<AuthContextType>({
   logout: async () => {},
 })
 
+// Intentar cargar el perfil con reintentos
+async function fetchProfile(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  retries = 3
+): Promise<AppUser | null> {
+  for (let i = 0; i < retries; i++) {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .single()
+
+    if (data) return data as AppUser
+
+    console.warn(
+      `[Auth] Intento ${i + 1}/${retries} falló al cargar perfil:`,
+      error?.message || "sin datos"
+    )
+
+    // Esperar antes de reintentar (200ms, 600ms, 1200ms)
+    if (i < retries - 1) {
+      await new Promise((r) => setTimeout(r, 200 * (i + 1) * 2))
+    }
+  }
+  return null
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null)
   const [loading, setLoading] = useState(true)
   const supabase = createClient()
+  const initialLoadDone = useRef(false)
+
+  const loadProfile = useCallback(async (userId: string) => {
+    const profile = await fetchProfile(supabase, userId)
+    if (profile) {
+      setUser(profile)
+    } else {
+      console.error("[Auth] No se pudo cargar el perfil después de todos los reintentos")
+    }
+    return profile
+  }, [supabase])
 
   useEffect(() => {
-    // Obtener sesión actual
+    // Carga inicial
     const getUser = async () => {
       try {
-        const { data: { user: authUser } } = await supabase.auth.getUser()
+        const { data: { user: authUser }, error } = await supabase.auth.getUser()
+
+        if (error) {
+          console.error("[Auth] Error obteniendo sesión:", error.message)
+        }
 
         if (authUser) {
-          // Buscar datos del usuario en la tabla public.users
-          const { data: profile } = await supabase
-            .from("users")
-            .select("*")
-            .eq("id", authUser.id)
-            .single()
-
-          if (profile) {
-            setUser(profile as AppUser)
-          }
+          await loadProfile(authUser.id)
         }
       } catch (error) {
-        console.error("Error al obtener usuario:", error)
+        console.error("[Auth] Error inesperado:", error)
       } finally {
+        initialLoadDone.current = true
         setLoading(false)
       }
     }
 
     getUser()
 
-    // Escuchar cambios de autenticación
+    // Escuchar cambios de autenticación (login, logout, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (session?.user) {
-          const { data: profile } = await supabase
-            .from("users")
-            .select("*")
-            .eq("id", session.user.id)
-            .single()
+      async (event, session) => {
+        // Ignorar el evento INITIAL_SESSION si ya hicimos la carga inicial
+        if (event === "INITIAL_SESSION" && initialLoadDone.current) return
 
-          if (profile) {
-            setUser(profile as AppUser)
-          }
+        if (session?.user) {
+          await loadProfile(session.user.id)
         } else {
           setUser(null)
         }
@@ -73,7 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     )
 
     return () => subscription.unsubscribe()
-  }, [supabase])
+  }, [supabase, loadProfile])
 
   const hasPermission = (module: ModuleName): boolean => {
     if (!user) return false
