@@ -27,24 +27,23 @@ async function fetchProfile(
   retries = 3
 ): Promise<AppUser | null> {
   for (let i = 0; i < retries; i++) {
+    console.log(`[Auth] Cargando perfil intento ${i + 1}/${retries} para userId: ${userId}`)
     const { data, error } = await supabase
       .from("users")
       .select("*")
       .eq("id", userId)
       .single()
 
+    console.log(`[Auth] Resultado intento ${i + 1}:`, { data: !!data, error: error?.message })
+
     if (data) return data as AppUser
 
-    console.warn(
-      `[Auth] Intento ${i + 1}/${retries} falló al cargar perfil:`,
-      error?.message || "sin datos"
-    )
-
-    // Esperar antes de reintentar (200ms, 600ms, 1200ms)
+    // Esperar antes de reintentar (400ms, 800ms)
     if (i < retries - 1) {
-      await new Promise((r) => setTimeout(r, 200 * (i + 1) * 2))
+      await new Promise((r) => setTimeout(r, 400 * (i + 1)))
     }
   }
+  console.log("[Auth] FALLO: no se pudo cargar perfil despues de todos los reintentos")
   return null
 }
 
@@ -58,40 +57,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loadProfile = useCallback(async (userId: string) => {
     const profile = await fetchProfile(supabase, userId)
     if (profile) {
+      console.log("[Auth] Perfil cargado OK:", profile.full_name, profile.role)
       setUser(profile)
     } else {
-      console.error("[Auth] No se pudo cargar el perfil después de todos los reintentos")
+      console.log("[Auth] ERROR: perfil es null")
     }
     return profile
   }, [supabase])
 
   useEffect(() => {
-    // Carga inicial
+    console.log("[Auth] useEffect ejecutado - iniciando carga")
+
     const getUser = async () => {
       try {
+        console.log("[Auth] Llamando supabase.auth.getUser()...")
         const { data: { user: authUser }, error } = await supabase.auth.getUser()
 
-        if (error) {
-          console.error("[Auth] Error obteniendo sesión:", error.message)
-        }
+        console.log("[Auth] getUser resultado:", {
+          tieneUser: !!authUser,
+          userId: authUser?.id,
+          email: authUser?.email,
+          error: error?.message
+        })
 
         if (authUser) {
           await loadProfile(authUser.id)
+        } else {
+          console.log("[Auth] No hay usuario autenticado")
         }
       } catch (error) {
-        console.error("[Auth] Error inesperado:", error)
+        console.log("[Auth] Error inesperado:", error)
       } finally {
         initialLoadDone.current = true
         setLoading(false)
+        console.log("[Auth] Carga inicial finalizada")
       }
     }
 
     getUser()
 
-    // Escuchar cambios de autenticación (login, logout, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        // Ignorar el evento INITIAL_SESSION si ya hicimos la carga inicial
+        console.log("[Auth] onAuthStateChange:", event, !!session?.user)
+
         if (event === "INITIAL_SESSION" && initialLoadDone.current) return
 
         if (session?.user) {
