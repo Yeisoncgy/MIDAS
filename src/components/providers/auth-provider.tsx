@@ -49,6 +49,7 @@ async function fetchProfile(
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  console.log("===== MIDAS AUTH PROVIDER V2 CARGADO =====")
   const [user, setUser] = useState<AppUser | null>(null)
   const [loading, setLoading] = useState(true)
   const supabase = createClient()
