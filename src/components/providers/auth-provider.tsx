@@ -27,28 +27,17 @@ async function fetchProfile(
 ): Promise<AppUser | null> {
   for (let i = 0; i < 3; i++) {
     try {
-      // Timeout de 5 segundos por intento
       const result = await Promise.race([
-        supabase
-          .from("users")
-          .select("*")
-          .eq("id", userId)
-          .single(),
+        supabase.from("users").select("*").eq("id", userId).single(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("timeout")), 5000)
+          setTimeout(() => reject(new Error("timeout")), 3000)
         ),
       ])
-
-      if (result.data) {
-        console.log("[Auth] Perfil cargado:", result.data.full_name)
-        return result.data as AppUser
-      }
-      console.log(`[Auth] Intento ${i + 1}/3 sin datos:`, result.error?.message)
-    } catch (err: any) {
-      console.log(`[Auth] Intento ${i + 1}/3 error:`, err.message)
+      if (result.data) return result.data as AppUser
+    } catch {
+      // timeout o error de red, reintentar
     }
-
-    if (i < 2) await new Promise((r) => setTimeout(r, 500 * (i + 1)))
+    if (i < 2) await new Promise((r) => setTimeout(r, 300 * (i + 1)))
   }
   return null
 }
@@ -58,14 +47,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Crear cliente DENTRO del efecto para que tenga acceso a cookies
     const supabase = createClient()
     let mounted = true
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log("[Auth] Event:", event, session?.user?.email)
-
         if (event === "SIGNED_OUT" || !session?.user) {
           if (mounted) {
             setUser(null)
@@ -74,7 +60,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return
         }
 
-        // Cargar perfil del usuario
         const profile = await fetchProfile(supabase, session.user.id)
         if (mounted) {
           setUser(profile)
