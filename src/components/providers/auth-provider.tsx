@@ -20,20 +20,34 @@ const AuthContext = createContext<AuthContextType>({
   logout: async () => {},
 })
 
-// Cliente singleton fuera del componente
-const supabase = createClient()
-
-// Cargar perfil con reintentos
-async function fetchProfile(userId: string): Promise<AppUser | null> {
+// Cargar perfil con timeout y reintentos
+async function fetchProfile(
+  supabase: ReturnType<typeof createClient>,
+  userId: string
+): Promise<AppUser | null> {
   for (let i = 0; i < 3; i++) {
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("id", userId)
-      .single()
+    try {
+      // Timeout de 5 segundos por intento
+      const result = await Promise.race([
+        supabase
+          .from("users")
+          .select("*")
+          .eq("id", userId)
+          .single(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000)
+        ),
+      ])
 
-    if (data) return data as AppUser
-    console.log(`[Auth] Intento ${i + 1}/3 fallo:`, error?.message)
+      if (result.data) {
+        console.log("[Auth] Perfil cargado:", result.data.full_name)
+        return result.data as AppUser
+      }
+      console.log(`[Auth] Intento ${i + 1}/3 sin datos:`, result.error?.message)
+    } catch (err: any) {
+      console.log(`[Auth] Intento ${i + 1}/3 error:`, err.message)
+    }
+
     if (i < 2) await new Promise((r) => setTimeout(r, 500 * (i + 1)))
   }
   return null
@@ -44,28 +58,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    console.log("[Auth] Iniciando carga de sesion...")
+    // Crear cliente DENTRO del efecto para que tenga acceso a cookies
+    const supabase = createClient()
     let mounted = true
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log("[Auth] AuthStateChange:", event, session?.user?.email)
+        console.log("[Auth] Event:", event, session?.user?.email)
 
-        if (event === "SIGNED_OUT") {
-          setUser(null)
-          if (mounted) setLoading(false)
+        if (event === "SIGNED_OUT" || !session?.user) {
+          if (mounted) {
+            setUser(null)
+            setLoading(false)
+          }
           return
         }
 
-        if (session?.user) {
-          const profile = await fetchProfile(session.user.id)
-          if (profile && mounted) {
-            console.log("[Auth] Perfil cargado:", profile.full_name)
-            setUser(profile)
-          }
+        // Cargar perfil del usuario
+        const profile = await fetchProfile(supabase, session.user.id)
+        if (mounted) {
+          setUser(profile)
+          setLoading(false)
         }
-
-        if (mounted) setLoading(false)
       }
     )
 
@@ -73,7 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false
       subscription.unsubscribe()
     }
-  }, []) // Sin dependencias — supabase es singleton fuera del componente
+  }, [])
 
   const hasPermission = (module: ModuleName): boolean => {
     if (!user) return false
@@ -84,6 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAdmin = user?.role === "admin"
 
   const logout = async () => {
+    const supabase = createClient()
     await supabase.auth.signOut()
     setUser(null)
     window.location.href = "/login"
