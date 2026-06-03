@@ -41,6 +41,11 @@ yarn-error.log*
 # claude code
 .claude/
 .agents/
+.mcp.json
+CLAUDE.md
+
+# datos / seed locales
+SEED_COMPLETO.sql
 
 # typescript
 *.tsbuildinfo

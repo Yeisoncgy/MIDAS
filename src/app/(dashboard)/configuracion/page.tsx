@@ -1,20 +1,38 @@
 "use client"
 
 import Link from "next/link"
-import { Users, ChevronRight } from "lucide-react"
+import { Users, Truck, ChevronRight, Shield } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { useAuth } from "@/components/providers/auth-provider"
-import { PageHeader } from "@/components/shared/page-header"
+import { PageShell } from "@/components/shared/page-shell"
 import { EmptyState } from "@/components/shared/empty-state"
 import { Card } from "@/components/ui/card"
-import { Shield } from "lucide-react"
 
-const SECTIONS = [
+interface ConfigSection {
+  title: string
+  description: string
+  href: string
+  icon: LucideIcon
+  borderColor: string
+  iconColor: string
+}
+
+const SECTIONS: ConfigSection[] = [
   {
     title: "Usuarios",
     description: "Gestión de cuentas, roles y permisos del sistema",
     href: "/configuracion/usuarios",
     icon: Users,
     borderColor: "border-l-gold",
+    iconColor: "text-gold",
+  },
+  {
+    title: "Proveedores",
+    description: "Directorio de proveedores de productos e insumos",
+    href: "/configuracion/proveedores",
+    icon: Truck,
+    borderColor: "border-l-info",
+    iconColor: "text-info",
   },
 ]
 
@@ -32,41 +50,39 @@ export default function ConfiguracionPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Configuración"
-        description="Configuración general del sistema"
-      />
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <PageShell
+      title="Configuración"
+      description="Administra usuarios, proveedores y los ajustes generales del sistema"
+    >
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {SECTIONS.map((section) => (
           <Link key={section.href} href={section.href}>
             <Card
-              className={`relative border-l-[3px] ${section.borderColor} p-5 transition-all duration-200 hover:shadow-card-hover hover:-translate-y-0.5 cursor-pointer group`}
+              className={`group relative cursor-pointer border-l-[3px] ${section.borderColor} p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover`}
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-4">
-                  <div className="size-10 rounded-xl bg-muted flex items-center justify-center shrink-0">
-                    <section.icon size={20} className="text-muted-foreground" />
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted">
+                    <section.icon size={20} className={section.iconColor} />
                   </div>
                   <div>
                     <h3 className="text-base font-semibold text-foreground">
                       {section.title}
                     </h3>
-                    <p className="text-sm text-muted-foreground mt-0.5">
+                    <p className="mt-0.5 text-sm text-muted-foreground">
                       {section.description}
                     </p>
                   </div>
                 </div>
                 <ChevronRight
                   size={18}
-                  className="text-muted-foreground/40 group-hover:text-gold group-hover:translate-x-0.5 transition-all shrink-0 mt-1"
+                  className="mt-1 shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-gold"
                 />
               </div>
             </Card>
           </Link>
         ))}
       </div>
-    </div>
+    </PageShell>
   )
 }

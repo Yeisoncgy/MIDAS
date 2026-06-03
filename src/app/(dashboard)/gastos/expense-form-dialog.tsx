@@ -13,10 +13,12 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -51,7 +53,7 @@ export function ExpenseFormDialog({
   const [expenseDate, setExpenseDate] = useState(toLocalDate(new Date()))
   const [concept, setConcept] = useState("")
   const [categoryId, setCategoryId] = useState("")
-  const [amount, setAmount] = useState("")
+  const [amount, setAmount] = useState<number | null>(null)
   const [paymentMethod, setPaymentMethod] = useState("efectivo")
   const [paymentAccountId, setPaymentAccountId] = useState("")
   const [supplierId, setSupplierId] = useState("")
@@ -101,7 +103,7 @@ export function ExpenseFormDialog({
       setExpenseDate(expense.expense_date)
       setConcept(expense.concept)
       setCategoryId(expense.category_id)
-      setAmount(String(expense.amount))
+      setAmount(expense.amount)
       setPaymentMethod(expense.payment_method)
       setPaymentAccountId(expense.payment_account_id || "")
       setSupplierId(expense.supplier_id || "")
@@ -115,7 +117,7 @@ export function ExpenseFormDialog({
       setExpenseDate(toLocalDate(new Date()))
       setConcept("")
       setCategoryId("")
-      setAmount("")
+      setAmount(null)
       setPaymentMethod("efectivo")
       setPaymentAccountId("")
       setSupplierId("")
@@ -147,13 +149,13 @@ export function ExpenseFormDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!concept.trim() || !categoryId || !amount) {
+    if (!concept.trim() || !categoryId || amount === null) {
       toast.error("Concepto, categoría y monto son requeridos")
       return
     }
 
-    const parsedAmount = parseFloat(amount)
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    const parsedAmount = amount
+    if (parsedAmount <= 0) {
       toast.error("El monto debe ser mayor a 0")
       return
     }
@@ -305,13 +307,11 @@ export function ExpenseFormDialog({
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="exp-amount">Monto (COP) *</Label>
-                <Input
+                <MoneyInput
                   id="exp-amount"
-                  type="number"
-                  min="1"
-                  placeholder="0"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onValueChange={setAmount}
+                  placeholder="0"
                   disabled={loading}
                 />
               </div>
@@ -368,19 +368,23 @@ export function ExpenseFormDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="shrink-0"
-                  onClick={() => {
-                    setHideForSupplier(true)
-                    setShowSupplierForm(true)
-                  }}
-                  title="Crear proveedor"
-                >
-                  <Plus size={16} />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="shrink-0"
+                      onClick={() => {
+                        setHideForSupplier(true)
+                        setShowSupplierForm(true)
+                      }}
+                    >
+                      <Plus size={16} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Crear proveedor</TooltipContent>
+                </Tooltip>
               </div>
             </div>
 

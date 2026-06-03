@@ -25,6 +25,8 @@ import {
   LogOut,
   User,
   X,
+  Star,
+  type LucideIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/components/providers/auth-provider"
@@ -37,10 +39,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { ROLE_LABELS } from "@/lib/constants"
+import { ROLE_LABELS, NAV_ITEMS, NAV_SECTIONS, type NavItem } from "@/lib/constants"
+import { useSidebarPrefs } from "@/hooks/use-sidebar-prefs"
 
 // Mapa de iconos para renderizar dinámicamente
-const ICON_MAP = {
+const ICON_MAP: Record<string, LucideIcon> = {
   LayoutDashboard,
   DollarSign,
   Receipt,
@@ -57,152 +60,198 @@ const ICON_MAP = {
   Settings,
   Truck,
   BookOpen,
-} as const
-
-type IconName = keyof typeof ICON_MAP
-
-interface NavItemConfig {
-  label: string
-  href: string
-  icon: IconName
-  section: "principal" | "secundaria" | "admin"
 }
-
-const NAV_ITEMS: NavItemConfig[] = [
-  // Principal
-  { label: "Dashboard", href: "/", icon: "LayoutDashboard", section: "principal" },
-  { label: "Ventas", href: "/ventas", icon: "DollarSign", section: "principal" },
-  { label: "Facturación", href: "/facturacion", icon: "Receipt", section: "principal" },
-  { label: "Inventario", href: "/inventario", icon: "Package", section: "principal" },
-  { label: "Materias Primas", href: "/materias-primas", icon: "Layers", section: "principal" },
-  { label: "Gastos", href: "/gastos", icon: "TrendingDown", section: "principal" },
-  { label: "Caja y Banco", href: "/caja", icon: "Landmark", section: "principal" },
-  { label: "Cuentas", href: "/cuentas", icon: "ClipboardList", section: "principal" },
-  { label: "Socios", href: "/socios", icon: "Users", section: "principal" },
-  // Secundaria
-  { label: "Herramientas", href: "/herramientas", icon: "Wrench", section: "secundaria" },
-  { label: "Pautas", href: "/pautas", icon: "Megaphone", section: "secundaria" },
-  { label: "Clientes", href: "/clientes", icon: "UserCircle", section: "secundaria" },
-  { label: "Proveedores", href: "/proveedores", icon: "Truck", section: "secundaria" },
-  { label: "Reportes", href: "/reportes", icon: "BarChart3", section: "secundaria" },
-  { label: "Wiki", href: "/wiki", icon: "BookOpen", section: "secundaria" },
-  // Admin
-  { label: "Configuración", href: "/configuracion", icon: "Settings", section: "admin" },
-]
 
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
   collapsed?: boolean
   onCollapse?: (collapsed: boolean) => void
+  /** Badges por href (ej. { "/cuentas": 3 } para 3 cuentas vencidas). */
+  badges?: Record<string, number>
 }
 
-export function Sidebar({ isOpen, onClose, collapsed = false, onCollapse }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, collapsed = false, onCollapse, badges }: SidebarProps) {
   const pathname = usePathname()
   const { user, isAdmin, hasPermission, logout } = useAuth()
+  const { isFavorite, toggleFavorite, favorites } = useSidebarPrefs()
 
-  const isActive = useCallback((href: string) => {
-    if (href === "/") return pathname === "/"
-    return pathname.startsWith(href)
-  }, [pathname])
+  // Estado activo robusto: coincidencia exacta para "/", por segmento para el resto
+  const isActive = useCallback(
+    (href: string) => {
+      if (href === "/") return pathname === "/"
+      return pathname === href || pathname.startsWith(href + "/")
+    },
+    [pathname]
+  )
 
-  const { principalItems, secundariaItems, adminItems } = useMemo(() => ({
-    principalItems: NAV_ITEMS.filter((item) => item.section === "principal"),
-    secundariaItems: NAV_ITEMS.filter((item) => item.section === "secundaria"),
-    adminItems: NAV_ITEMS.filter((item) => item.section === "admin"),
-  }), [])
+  // Items visibles según permisos del usuario
+  const visibleItems = useMemo(
+    () =>
+      NAV_ITEMS.filter((item) => {
+        if (item.adminOnly && !isAdmin) return false
+        return hasPermission(item.module)
+      }),
+    [hasPermission, isAdmin]
+  )
 
-  const renderNavItem = useCallback((item: NavItemConfig) => {
-    const Icon = ICON_MAP[item.icon]
-    const active = isActive(item.href)
-
-    // Verificar permisos (admin ve todo, otros según permisos)
-    if (item.section === "admin" && !isAdmin) return null
-
-    const linkContent = (
-      <Link
-        href={item.href}
-        onClick={onClose}
-        className={cn(
-          "flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm transition-all duration-150",
-          active
-            ? "bg-sidebar-active text-gold border-l-[3px] border-gold pl-[13px]"
-            : "text-[#9CA3AF] hover:bg-sidebar-hover hover:text-white",
-          collapsed && "justify-center px-0"
-        )}
-      >
-        <Icon className={cn("shrink-0", active ? "text-gold" : "")} size={20} />
-        {!collapsed && <span className="truncate">{item.label}</span>}
-      </Link>
-    )
-
-    // Tooltip cuando está colapsado
-    if (collapsed) {
-      return (
-        <Tooltip key={item.href}>
-          <TooltipTrigger asChild>{linkContent}</TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8}>
-            {item.label}
-          </TooltipContent>
-        </Tooltip>
-      )
+  // Agrupar por sección
+  const sections = useMemo(() => {
+    const groups: Record<NavItem["section"], NavItem[]> = {
+      principal: [],
+      secundaria: [],
+      admin: [],
     }
+    for (const item of visibleItems) groups[item.section].push(item)
+    return groups
+  }, [visibleItems])
 
-    return <div key={item.href}>{linkContent}</div>
-  }, [isActive, isAdmin, onClose, collapsed])
+  // Favoritos visibles (que el usuario tenga permiso de ver)
+  const favoriteItems = useMemo(
+    () => visibleItems.filter((item) => favorites.includes(item.href)),
+    [visibleItems, favorites]
+  )
+
+  const renderNavItem = useCallback(
+    (item: NavItem, opts?: { inFavorites?: boolean }) => {
+      const Icon = ICON_MAP[item.icon] ?? LayoutDashboard
+      const active = isActive(item.href)
+      const badge = badges?.[item.href]
+      const fav = isFavorite(item.href)
+
+      const linkContent = (
+        <Link
+          href={item.href}
+          onClick={onClose}
+          className={cn(
+            "group/item relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors duration-150",
+            active
+              ? "bg-sidebar-active text-gold font-medium"
+              : "text-[#9CA3AF] hover:bg-sidebar-hover hover:text-white",
+            collapsed && "justify-center px-0"
+          )}
+        >
+          {/* Indicador dorado de activo */}
+          {active && !collapsed && (
+            <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-gold" />
+          )}
+          <Icon className={cn("shrink-0", active && "text-gold")} size={19} />
+          {!collapsed && (
+            <>
+              <span className="flex-1 truncate">{item.label}</span>
+              {badge != null && badge > 0 && (
+                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-error px-1.5 text-[10px] font-semibold text-white tabular-nums">
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
+              {/* Estrella de favorito (aparece al hover del item) */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  toggleFavorite(item.href)
+                }}
+                className={cn(
+                  "shrink-0 rounded p-0.5 transition-opacity",
+                  fav
+                    ? "text-gold opacity-100"
+                    : "text-[#6B6B6B] opacity-0 hover:text-white group-hover/item:opacity-100"
+                )}
+                aria-label={fav ? "Quitar de favoritos" : "Agregar a favoritos"}
+              >
+                <Star size={13} className={cn(fav && "fill-gold")} />
+              </button>
+            </>
+          )}
+          {/* Badge en modo colapsado: punto rojo */}
+          {collapsed && badge != null && badge > 0 && (
+            <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-error" />
+          )}
+        </Link>
+      )
+
+      if (collapsed) {
+        return (
+          <Tooltip key={`${opts?.inFavorites ? "fav-" : ""}${item.href}`}>
+            <TooltipTrigger asChild>{linkContent}</TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              {item.label}
+            </TooltipContent>
+          </Tooltip>
+        )
+      }
+
+      return <div key={`${opts?.inFavorites ? "fav-" : ""}${item.href}`}>{linkContent}</div>
+    },
+    [isActive, onClose, collapsed, badges, isFavorite, toggleFavorite]
+  )
+
+  const renderSection = useCallback(
+    (key: NavItem["section"], items: NavItem[]) => {
+      if (items.length === 0) return null
+      return (
+        <div key={key} className="space-y-0.5">
+          {!collapsed && (
+            <p className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#4A4A4A]">
+              {NAV_SECTIONS[key]}
+            </p>
+          )}
+          {collapsed && <div className="my-2 border-t border-[#1A1A1A]" />}
+          {items.map((item) => renderNavItem(item))}
+        </div>
+      )
+    },
+    [collapsed, renderNavItem]
+  )
 
   const sidebarContent = (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col">
       {/* Logo */}
-      <div className={cn(
-        "px-6 py-5 border-b border-[#1A1A1A]",
-        collapsed && "px-2 flex justify-center"
-      )}>
+      <div className={cn("border-b border-[#1A1A1A] px-5 py-5", collapsed && "flex justify-center px-2")}>
         <Link href="/" className="block" onClick={onClose}>
-          <h1 className={cn(
-            "font-[family-name:var(--font-display)] text-gold font-bold tracking-[0.08em]",
-            collapsed ? "text-lg" : "text-2xl"
-          )}>
+          <h1
+            className={cn(
+              "font-[family-name:var(--font-display)] font-bold tracking-[0.08em] text-gold",
+              collapsed ? "text-lg" : "text-2xl"
+            )}
+          >
             MIDAS<span className="text-gold/60">·</span>
           </h1>
           {!collapsed && (
-            <p className="text-[11px] text-[#6B6B6B] tracking-wide mt-0.5">
-              Casa Artemisa
-            </p>
+            <p className="mt-0.5 text-[11px] tracking-wide text-[#6B6B6B]">Casa Artemisa</p>
           )}
         </Link>
       </div>
 
       {/* Navegación */}
-      <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-        {/* Sección principal */}
-        {principalItems.map(renderNavItem)}
-
-        {/* Separador */}
-        <div className="my-4 border-t border-[#1A1A1A]" />
-
-        {/* Sección secundaria */}
-        {!collapsed && (
-          <p className="px-4 text-[11px] uppercase tracking-[0.1em] text-[#4A4A4A] mb-2 mt-2">
-            Herramientas
-          </p>
+      <nav className="flex-1 overflow-y-auto px-3 py-2">
+        {/* Favoritos anclados */}
+        {favoriteItems.length > 0 && (
+          <div className="space-y-0.5">
+            {!collapsed && (
+              <p className="flex items-center gap-1 px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-gold/70">
+                <Star size={10} className="fill-gold/70" />
+                Favoritos
+              </p>
+            )}
+            {collapsed && <div className="mb-2 border-t border-[#1A1A1A]" />}
+            {favoriteItems.map((item) => renderNavItem(item, { inFavorites: true }))}
+            {!collapsed && <div className="mx-3 mt-2 border-t border-[#1A1A1A]" />}
+          </div>
         )}
-        {secundariaItems.map(renderNavItem)}
 
-        {/* Admin */}
-        {isAdmin && (
-          <>
-            <div className="my-4 border-t border-[#1A1A1A]" />
-            {adminItems.map(renderNavItem)}
-          </>
-        )}
+        {renderSection("principal", sections.principal)}
+        {renderSection("secundaria", sections.secundaria)}
+        {renderSection("admin", sections.admin)}
       </nav>
 
       {/* Botón colapsar (solo desktop) */}
-      <div className="hidden lg:block px-3 py-2 border-t border-[#1A1A1A]">
+      <div className="hidden border-t border-[#1A1A1A] px-3 py-2 lg:block">
         <button
-          onClick={() => onCollapse && onCollapse(!collapsed)}
-          className="flex items-center justify-center w-full py-2 text-[#6B6B6B] hover:text-white transition-colors rounded-lg hover:bg-sidebar-hover"
+          onClick={() => onCollapse?.(!collapsed)}
+          className="flex w-full items-center justify-center rounded-lg py-2 text-[#6B6B6B] transition-colors hover:bg-sidebar-hover hover:text-white"
+          aria-label={collapsed ? "Expandir menú" : "Colapsar menú"}
         >
           {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
         </button>
@@ -210,32 +259,29 @@ export function Sidebar({ isOpen, onClose, collapsed = false, onCollapse }: Side
 
       {/* Perfil del usuario */}
       {user && (
-        <div className={cn(
-          "px-3 py-3 border-t border-[#1A1A1A]",
-          collapsed && "px-2"
-        )}>
+        <div className={cn("border-t border-[#1A1A1A] px-3 py-3", collapsed && "px-2")}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className={cn(
-                "flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-sidebar-hover transition-colors",
-                collapsed && "justify-center px-0"
-              )}>
-                {/* Avatar */}
-                <div className={cn(
-                  "shrink-0 rounded-full flex items-center justify-center text-sm font-semibold",
-                  "size-9",
-                  isAdmin ? "bg-gold text-white" : "bg-[#374151] text-white"
-                )}>
+              <button
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-sidebar-hover",
+                  collapsed && "justify-center px-0"
+                )}
+              >
+                <div
+                  className={cn(
+                    "flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
+                    isAdmin ? "bg-gold text-white" : "bg-[#374151] text-white"
+                  )}
+                >
                   {getInitials(user.full_name)}
                 </div>
                 {!collapsed && (
-                  <div className="text-left min-w-0">
-                    <p className="text-sm font-medium text-white truncate">
+                  <div className="min-w-0 text-left">
+                    <p className="truncate text-sm font-medium text-white">
                       {user.full_name.split(" ")[0]}
                     </p>
-                    <p className="text-[11px] text-[#6B6B6B]">
-                      {ROLE_LABELS[user.role]}
-                    </p>
+                    <p className="text-[11px] text-[#6B6B6B]">{ROLE_LABELS[user.role]}</p>
                   </div>
                 )}
               </button>
@@ -248,10 +294,7 @@ export function Sidebar({ isOpen, onClose, collapsed = false, onCollapse }: Side
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-error focus:text-error"
-                onClick={logout}
-              >
+              <DropdownMenuItem className="text-error focus:text-error" onClick={logout}>
                 <LogOut size={16} />
                 Cerrar sesión
               </DropdownMenuItem>
@@ -267,7 +310,7 @@ export function Sidebar({ isOpen, onClose, collapsed = false, onCollapse }: Side
       {/* Sidebar desktop */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col fixed left-0 top-0 h-screen bg-sidebar-bg border-r border-[#1A1A1A] z-40 transition-all duration-300",
+          "fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-[#1A1A1A] bg-sidebar-bg transition-all duration-300 lg:flex",
           collapsed ? "w-[72px]" : "w-[260px]"
         )}
       >
@@ -277,7 +320,7 @@ export function Sidebar({ isOpen, onClose, collapsed = false, onCollapse }: Side
       {/* Overlay mobile */}
       {isOpen && (
         <div
-          className="lg:hidden fixed inset-0 bg-black/40 backdrop-blur-[2px] z-40"
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] lg:hidden"
           onClick={onClose}
         />
       )}
@@ -285,14 +328,14 @@ export function Sidebar({ isOpen, onClose, collapsed = false, onCollapse }: Side
       {/* Sidebar mobile (drawer) */}
       <aside
         className={cn(
-          "lg:hidden fixed left-0 top-0 h-screen w-[280px] bg-sidebar-bg z-50 transition-transform duration-250",
+          "fixed left-0 top-0 z-50 h-screen w-[280px] bg-sidebar-bg transition-transform duration-300 lg:hidden",
           isOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        {/* Botón cerrar en mobile */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-[#6B6B6B] hover:text-white transition-colors"
+          className="absolute right-4 top-4 text-[#6B6B6B] transition-colors hover:text-white"
+          aria-label="Cerrar menú"
         >
           <X size={20} />
         </button>

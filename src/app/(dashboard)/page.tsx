@@ -1,15 +1,18 @@
 "use client"
 
 import { useEffect, useState, useCallback } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useAuth } from "@/components/providers/auth-provider"
 import { StatCard } from "@/components/shared/stat-card"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { createClient } from "@/lib/supabase/client"
 import { getGreeting, formatCurrentDate, formatCOP, formatRelativeTime } from "@/lib/format"
 import { PAYMENT_METHODS } from "@/lib/constants"
 import type { DashboardStats, RecentSale, DailyData, Debtor } from "@/lib/types"
-import { CreditCard, PackageCheck, Wallet } from "lucide-react"
+import { CreditCard, PackageCheck, Wallet, Plus, Receipt, TrendingDown, Landmark } from "lucide-react"
 import {
   AreaChart,
   Area,
@@ -21,7 +24,14 @@ import {
 } from "recharts"
 
 export default function DashboardPage() {
-  const { user, loading: authLoading } = useAuth()
+  const { user, loading: authLoading, hasPermission } = useAuth()
+  const router = useRouter()
+
+  const quickActions = [
+    { label: "Nueva venta", href: "/facturacion?nuevo=1", icon: Receipt, module: "facturacion" as const },
+    { label: "Registrar gasto", href: "/gastos?nuevo=1", icon: TrendingDown, module: "gastos" as const },
+    { label: "Movimiento caja", href: "/caja?nuevo=1", icon: Landmark, module: "caja" as const },
+  ].filter((a) => hasPermission(a.module))
   const [stats, setStats] = useState<DashboardStats>({
     ventasMes: 0,
     gastosMes: 0,
@@ -230,6 +240,27 @@ export default function DashboardPage() {
               {formatCurrentDate()} — Resumen de operaciones Order-to-Cash
             </p>
           </div>
+
+          {/* Accesos rápidos a las tareas del día */}
+          {quickActions.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {quickActions.map((action) => {
+                const Icon = action.icon
+                return (
+                  <Button
+                    key={action.href}
+                    size="sm"
+                    variant="outline"
+                    className="bg-white/60 backdrop-blur"
+                    onClick={() => router.push(action.href)}
+                  >
+                    <Icon size={15} className="mr-1.5" />
+                    {action.label}
+                  </Button>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -243,6 +274,7 @@ export default function DashboardPage() {
             variant="bento"
             borderColor="gold"
             delay={0}
+            onClick={hasPermission("caja") ? () => router.push("/caja") : undefined}
           />
         </div>
         <StatCard
@@ -252,6 +284,7 @@ export default function DashboardPage() {
           variant="bento"
           borderColor="success"
           delay={1}
+          onClick={hasPermission("ventas") ? () => router.push("/ventas") : undefined}
         />
         <StatCard
           label="Cuentas por Cobrar"
@@ -260,6 +293,7 @@ export default function DashboardPage() {
           variant="bento"
           borderColor="warning"
           delay={2}
+          onClick={hasPermission("cuentas") ? () => router.push("/cuentas") : undefined}
         />
       </div>
 
@@ -271,6 +305,7 @@ export default function DashboardPage() {
           icon="TrendingDown"
           borderColor="error"
           delay={3}
+          onClick={hasPermission("gastos") ? () => router.push("/gastos") : undefined}
         />
         <StatCard
           label="Dinero en Cajón"
@@ -278,6 +313,7 @@ export default function DashboardPage() {
           icon="Banknote"
           borderColor="info"
           delay={4}
+          onClick={hasPermission("caja") ? () => router.push("/caja") : undefined}
         />
         <StatCard
           label="Dinero en Bancos"
@@ -285,6 +321,7 @@ export default function DashboardPage() {
           icon="Building2"
           borderColor="info"
           delay={5}
+          onClick={hasPermission("caja") ? () => router.push("/caja") : undefined}
         />
         <StatCard
           label="Unidades Vendidas"
@@ -293,6 +330,7 @@ export default function DashboardPage() {
           format="units"
           borderColor="gold"
           delay={6}
+          onClick={hasPermission("inventario") ? () => router.push("/inventario") : undefined}
         />
       </div>
 
@@ -436,7 +474,8 @@ export default function DashboardPage() {
               {recentSales.map((sale) => {
                 const metodo = PAYMENT_METHODS.find((m) => m.value === sale.payment_method)?.label || sale.payment_method
                 return (
-                  <div
+                  <Link
+                    href="/ventas"
                     key={sale.id}
                     className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl bg-white/60 border border-white shadow-sm hover:bg-white/90 hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 group/item gap-3 sm:gap-0"
                   >
@@ -463,7 +502,7 @@ export default function DashboardPage() {
                       </span>
                       <StatusBadge status={sale.status as any} />
                     </div>
-                  </div>
+                  </Link>
                 )
               })}
             </div>
@@ -499,7 +538,7 @@ export default function DashboardPage() {
               {debtors.map((debtor) => {
                 const progress = Math.round((debtor.paidAmount / debtor.totalAmount) * 100)
                 return (
-                  <div key={debtor.id} className="p-5 rounded-2xl bg-white/60 border border-white shadow-sm hover:bg-white/90 hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 group/item space-y-4">
+                  <Link href="/cuentas" key={debtor.id} className="block p-5 rounded-2xl bg-white/60 border border-white shadow-sm hover:bg-white/90 hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 group/item space-y-4">
                     <div className="flex items-start justify-between">
                       <div className="min-w-0 pr-4">
                         <p className="text-[15px] font-bold truncate group-hover/item:text-warning transition-colors">{debtor.clientName}</p>
@@ -533,7 +572,7 @@ export default function DashboardPage() {
                         </span>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                 )
               })}
             </div>

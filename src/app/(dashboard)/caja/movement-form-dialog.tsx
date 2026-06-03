@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import {
@@ -23,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { formatCOP } from "@/lib/format"
+import { toLocalDate } from "@/lib/date-periods"
 import type { CashBankAccount, CashMovementType } from "@/lib/types"
 
 const MOVEMENT_TYPES: { value: CashMovementType; label: string; icon: typeof ArrowDownLeft; color: string }[] = [
@@ -50,8 +52,9 @@ export function MovementFormDialog({
   const [movementType, setMovementType] = useState<CashMovementType>("in")
   const [accountId, setAccountId] = useState("")
   const [destAccountId, setDestAccountId] = useState("")
-  const [amount, setAmount] = useState("")
+  const [amount, setAmount] = useState<number | null>(null)
   const [concept, setConcept] = useState("")
+  const [movementDate, setMovementDate] = useState(() => toLocalDate(new Date()))
   const [loading, setLoading] = useState(false)
 
   const activeAccounts = accounts.filter((a) => a.is_active)
@@ -62,8 +65,17 @@ export function MovementFormDialog({
     setMovementType("in")
     setAccountId("")
     setDestAccountId("")
-    setAmount("")
+    setAmount(null)
     setConcept("")
+    setMovementDate(toLocalDate(new Date()))
+  }
+
+  // Si el usuario elige una fecha distinta de hoy, registramos con esa fecha
+  // (a mediodía local para evitar saltos de día por zona horaria).
+  const resolveTimestamp = (): string | undefined => {
+    const today = toLocalDate(new Date())
+    if (!movementDate || movementDate === today) return undefined
+    return new Date(`${movementDate}T12:00:00`).toISOString()
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -74,7 +86,7 @@ export function MovementFormDialog({
       return
     }
 
-    const parsedAmount = parseFloat(amount)
+    const parsedAmount = amount
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       toast.error("El monto debe ser mayor a 0")
       return
@@ -111,6 +123,7 @@ export function MovementFormDialog({
     }
 
     setLoading(true)
+    const customTimestamp = resolveTimestamp()
 
     try {
       if (movementType === "in") {
@@ -125,6 +138,7 @@ export function MovementFormDialog({
           new_balance: newBalance,
           concept: concept.trim(),
           created_by: user?.id,
+          ...(customTimestamp ? { created_at: customTimestamp } : {}),
         })
         if (movError) throw movError
 
@@ -149,6 +163,7 @@ export function MovementFormDialog({
           new_balance: newBalance,
           concept: concept.trim(),
           created_by: user?.id,
+          ...(customTimestamp ? { created_at: customTimestamp } : {}),
         })
         if (movError) throw movError
 
@@ -189,6 +204,7 @@ export function MovementFormDialog({
           concept: `Transferencia a ${destName} — ${concept.trim()}`,
           transfer_to_account_id: destAccountId,
           created_by: user?.id,
+          ...(customTimestamp ? { created_at: customTimestamp } : {}),
         })
         if (outError) throw outError
 
@@ -203,6 +219,7 @@ export function MovementFormDialog({
           reference_type: "transfer",
           reference_id: accountId,
           created_by: user?.id,
+          ...(customTimestamp ? { created_at: customTimestamp } : {}),
         })
         if (inError) throw inError
 
@@ -308,18 +325,29 @@ export function MovementFormDialog({
             </div>
           )}
 
-          {/* Monto */}
-          <div className="space-y-1.5">
-            <Label htmlFor="mov-amount">Monto (COP) *</Label>
-            <Input
-              id="mov-amount"
-              type="number"
-              min="1"
-              placeholder="0"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              disabled={loading}
-            />
+          {/* Monto y fecha */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="mov-amount">Monto (COP) *</Label>
+              <MoneyInput
+                id="mov-amount"
+                value={amount}
+                onValueChange={setAmount}
+                placeholder="0"
+                disabled={loading}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="mov-date">Fecha</Label>
+              <Input
+                id="mov-date"
+                type="date"
+                value={movementDate}
+                max={toLocalDate(new Date())}
+                onChange={(e) => setMovementDate(e.target.value)}
+                disabled={loading}
+              />
+            </div>
           </div>
 
           {/* Concepto */}

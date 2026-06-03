@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
@@ -52,7 +53,7 @@ export function SubscriptionFormDialog({
   const isEditing = !!subscription
 
   const [toolName, setToolName] = useState("")
-  const [monthlyCost, setMonthlyCost] = useState(0)
+  const [monthlyCost, setMonthlyCost] = useState<number | null>(null)
   const [currency, setCurrency] = useState("COP")
   const [billingCycle, setBillingCycle] = useState("monthly")
   const [startDate, setStartDate] = useState("")
@@ -76,7 +77,7 @@ export function SubscriptionFormDialog({
         setNotes(subscription.notes || "")
       } else {
         setToolName("")
-        setMonthlyCost(0)
+        setMonthlyCost(null)
         setCurrency("COP")
         setBillingCycle("monthly")
         setStartDate(new Date().toISOString().split("T")[0])
@@ -93,7 +94,7 @@ export function SubscriptionFormDialog({
       toast.error("El nombre de la herramienta es obligatorio")
       return
     }
-    if (monthlyCost <= 0) {
+    if (!monthlyCost || monthlyCost <= 0) {
       toast.error("El costo mensual debe ser mayor a 0")
       return
     }
@@ -166,11 +167,9 @@ export function SubscriptionFormDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-muted-foreground mb-1">Costo mensual *</Label>
-              <Input
-                type="number"
-                min={1}
-                value={monthlyCost || ""}
-                onChange={(e) => setMonthlyCost(parseInt(e.target.value) || 0)}
+              <MoneyInput
+                value={monthlyCost}
+                onValueChange={setMonthlyCost}
                 placeholder="0"
                 disabled={loading}
               />

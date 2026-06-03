@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useEffect } from "react"
-import { CreditCard, Plus, Loader2, CheckCircle } from "lucide-react"
+import { CreditCard, Loader2, CheckCircle, AlertTriangle } from "lucide-react"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
 import { useAuth } from "@/components/providers/auth-provider"
@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { MoneyInput } from "@/components/ui/money-input"
 import {
   Select,
   SelectContent,
@@ -82,6 +83,14 @@ interface PaymentDialogProps {
   onCompleted: () => void
 }
 
+/** Una cuenta está vencida si su fecha de vencimiento ya pasó y aún queda saldo. */
+function isOverdue(dueDate: string | null | undefined, remaining: number): boolean {
+  if (!dueDate || remaining <= 0) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return new Date(dueDate) < today
+}
+
 export function PaymentDialog({
   open,
   onOpenChange,
@@ -103,9 +112,8 @@ export function PaymentDialog({
   const [liveRemaining, setLiveRemaining] = useState(0)
   const [liveStatus, setLiveStatus] = useState("")
 
-  // Form
-  const [showNewPayment, setShowNewPayment] = useState(false)
-  const [paymentAmount, setPaymentAmount] = useState(0)
+  // Form (expandido por defecto). MoneyInput entrega number | null.
+  const [paymentAmount, setPaymentAmount] = useState<number | null>(null)
   const [paymentMethod, setPaymentMethod] = useState("efectivo")
   const [paymentNotes, setPaymentNotes] = useState("")
 
@@ -120,6 +128,7 @@ export function PaymentDialog({
   const reference = type === "receivable"
     ? receivable?.sale?.invoice_number || ""
     : payable?.expense?.concept || ""
+  const dueDate = type === "receivable" ? receivable?.due_date : payable?.due_date
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -171,20 +180,21 @@ export function PaymentDialog({
         setLiveStatus(payable.status)
       }
       fetchData()
-      setShowNewPayment(false)
-      setPaymentAmount(0)
+      setPaymentAmount(null)
       setPaymentNotes("")
+      setPaymentMethod("efectivo")
     }
   }, [open, accountId, type, receivable, payable, fetchData])
 
   // Register payment
   const handleRegisterPayment = useCallback(async () => {
-    if (!accountId || !user || paymentAmount <= 0) {
+    const amount = paymentAmount ?? 0
+    if (!accountId || !user || amount <= 0) {
       toast.error("Ingresa un monto válido")
       return
     }
 
-    if (paymentAmount > liveRemaining) {
+    if (amount > liveRemaining) {
       toast.error(`El monto máximo es ${formatCOP(liveRemaining)}`)
       return
     }
@@ -198,7 +208,7 @@ export function PaymentDialog({
       const { error: payError } = await supabase.from("payment_records").insert({
         type,
         reference_id: accountId,
-        amount: paymentAmount,
+        amount,
         payment_method: paymentMethod,
         payment_account_id: cashAccountId,
         payment_date: new Date().toISOString(),
@@ -213,7 +223,7 @@ export function PaymentDialog({
         await registerCashMovement(supabase, {
           accountId: cashAccountId,
           type: type === "receivable" ? "in" : "out",
-          amount: paymentAmount,
+          amount,
           concept: type === "receivable"
             ? `Abono CxC ${reference}`
             : `Pago CxP ${entityName}`,
@@ -224,7 +234,7 @@ export function PaymentDialog({
       }
 
       // 3. Update account
-      const newPaid = livePaid + paymentAmount
+      const newPaid = livePaid + amount
       const newRemaining = liveTotal - newPaid
       const newStatus = newRemaining <= 0 ? "paid" : "partial"
 
@@ -252,13 +262,12 @@ export function PaymentDialog({
           description: `${entityName} — ${formatCOP(liveTotal)}`,
         })
       } else {
-        toast.success(`Abono de ${formatCOP(paymentAmount)} registrado`)
+        toast.success(`Abono de ${formatCOP(amount)} registrado`)
       }
 
       // Reset
-      setPaymentAmount(0)
+      setPaymentAmount(null)
       setPaymentNotes("")
-      setShowNewPayment(false)
 
       await fetchData()
       onCompleted()
@@ -275,6 +284,7 @@ export function PaymentDialog({
     ? Math.round((livePaid / liveTotal) * 100)
     : 0
   const isPaidOff = liveStatus === "paid" || liveRemaining <= 0
+  const overdue = !isPaidOff && isOverdue(dueDate, liveRemaining)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -305,6 +315,11 @@ export function PaymentDialog({
                     <CheckCircle size={14} />
                     {type === "receivable" ? "COBRADA" : "SALDADA"}
                   </span>
+                ) : overdue ? (
+                  <span className="flex items-center gap-1 text-xs font-semibold text-error">
+                    <AlertTriangle size={14} />
+                    VENCIDA
+                  </span>
                 ) : (
                   <span className="text-xs font-semibold text-warning">
                     {progressPercentage}% pagado
@@ -316,7 +331,7 @@ export function PaymentDialog({
               <div className="w-full bg-border rounded-full h-2.5 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
-                    isPaidOff ? "bg-success" : "bg-gold"
+                    isPaidOff ? "bg-success" : overdue ? "bg-error" : "bg-gold"
                   }`}
                   style={{ width: `${Math.min(100, progressPercentage)}%` }}
                 />
@@ -340,8 +355,10 @@ export function PaymentDialog({
               <div className="flex flex-col gap-1 text-xs text-muted-foreground pt-2 border-t border-border">
                 <div className="flex justify-between">
                   <span>{type === "receivable" ? "Cliente" : "Proveedor"}: {entityName}</span>
-                  {(type === "receivable" ? receivable?.due_date : payable?.due_date) && (
-                    <span>Vence: {formatDateShort((type === "receivable" ? receivable?.due_date : payable?.due_date)!)}</span>
+                  {dueDate && (
+                    <span className={overdue ? "font-semibold text-error" : ""}>
+                      Vence: {formatDateShort(dueDate)}
+                    </span>
                   )}
                 </div>
                 {reference && (
@@ -389,86 +406,61 @@ export function PaymentDialog({
               </div>
             )}
 
-            {/* New payment form */}
+            {/* New payment form — expandido por defecto */}
             {!isPaidOff && (
-              <div>
-                {!showNewPayment ? (
-                  <Button
-                    variant="outline"
-                    className="w-full border-gold/30 text-gold hover:bg-gold/5"
-                    onClick={() => setShowNewPayment(true)}
-                  >
-                    <Plus size={16} className="mr-1.5" />
-                    Registrar abono
-                  </Button>
-                ) : (
-                  <div className="bg-cream rounded-lg p-4 space-y-3">
-                    <h4 className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                      Nuevo abono
-                    </h4>
+              <div className="bg-cream rounded-lg p-4 space-y-3">
+                <h4 className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
+                  Nuevo abono
+                </h4>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <Label className="text-xs text-muted-foreground mb-1">
-                          Monto (máx. {formatCOP(liveRemaining)})
-                        </Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={liveRemaining}
-                          value={paymentAmount || ""}
-                          onChange={(e) => setPaymentAmount(parseInt(e.target.value) || 0)}
-                          placeholder="0"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs text-muted-foreground mb-1">Método de pago</Label>
-                        <Select value={paymentMethod} onValueChange={setPaymentMethod}>
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {PAYMENT_METHODS.map((pm) => (
-                              <SelectItem key={pm.value} value={pm.value}>
-                                {pm.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Nota (opcional)</Label>
-                      <Input
-                        value={paymentNotes}
-                        onChange={(e) => setPaymentNotes(e.target.value)}
-                        placeholder="Nota del abono..."
-                      />
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button
-                        onClick={handleRegisterPayment}
-                        disabled={submitting || paymentAmount <= 0}
-                        className="flex-1"
-                      >
-                        {submitting && <Loader2 size={16} className="mr-1.5 animate-spin" />}
-                        Registrar abono de {formatCOP(paymentAmount || 0)}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          setShowNewPayment(false)
-                          setPaymentAmount(0)
-                          setPaymentNotes("")
-                        }}
-                      >
-                        Cancelar
-                      </Button>
-                    </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">
+                      Monto (máx. {formatCOP(liveRemaining)})
+                    </Label>
+                    <MoneyInput
+                      value={paymentAmount}
+                      onValueChange={setPaymentAmount}
+                      max={liveRemaining}
+                      showMaxButton
+                      maxButtonLabel="Saldar todo"
+                      placeholder="0"
+                    />
                   </div>
-                )}
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">Método de pago</Label>
+                    <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PAYMENT_METHODS.map((pm) => (
+                          <SelectItem key={pm.value} value={pm.value}>
+                            {pm.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1">Nota (opcional)</Label>
+                  <Input
+                    value={paymentNotes}
+                    onChange={(e) => setPaymentNotes(e.target.value)}
+                    placeholder="Nota del abono..."
+                  />
+                </div>
+
+                <Button
+                  onClick={handleRegisterPayment}
+                  disabled={submitting || (paymentAmount ?? 0) <= 0}
+                  className="w-full"
+                >
+                  {submitting && <Loader2 size={16} className="mr-1.5 animate-spin" />}
+                  Registrar abono de {formatCOP(paymentAmount ?? 0)}
+                </Button>
               </div>
             )}
           </div>

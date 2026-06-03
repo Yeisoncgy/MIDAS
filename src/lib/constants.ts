@@ -1,29 +1,47 @@
 import type { ModuleName, ModulePermissions } from "./types"
 
 // ===== Navegación del sidebar =====
-export const NAV_ITEMS = [
-  // Sección principal
-  { label: "Dashboard", href: "/", icon: "LayoutDashboard", module: "dashboard" as ModuleName, section: "principal" as const },
-  { label: "Ventas", href: "/ventas", icon: "DollarSign", module: "ventas" as ModuleName, section: "principal" as const },
-  { label: "Facturación", href: "/facturacion", icon: "Receipt", module: "facturacion" as ModuleName, section: "principal" as const },
-  { label: "Inventario", href: "/inventario", icon: "Package", module: "inventario" as ModuleName, section: "principal" as const },
-  { label: "Materias Primas", href: "/materias-primas", icon: "Layers", module: "materias_primas" as ModuleName, section: "principal" as const },
-  { label: "Gastos", href: "/gastos", icon: "TrendingDown", module: "gastos" as ModuleName, section: "principal" as const },
-  { label: "Caja y Banco", href: "/caja", icon: "Landmark", module: "caja" as ModuleName, section: "principal" as const },
-  { label: "Cuentas", href: "/cuentas", icon: "ClipboardList", module: "cuentas" as ModuleName, section: "principal" as const },
-  { label: "Socios", href: "/socios", icon: "Users", module: "socios" as ModuleName, section: "principal" as const },
+// Item de navegación. `module` define el permiso requerido; `section` agrupa.
+export interface NavItem {
+  label: string
+  href: string
+  icon: string
+  module: ModuleName
+  section: "principal" | "secundaria" | "admin"
+  /** Solo visible para admin (además del permiso de módulo). */
+  adminOnly?: boolean
+}
 
-  // Sección secundaria
-  { label: "Herramientas", href: "/herramientas", icon: "Wrench", module: "herramientas" as ModuleName, section: "secundaria" as const },
-  { label: "Pautas", href: "/pautas", icon: "Megaphone", module: "pautas" as ModuleName, section: "secundaria" as const },
-  { label: "Clientes", href: "/clientes", icon: "UserCircle", module: "clientes" as ModuleName, section: "secundaria" as const },
-  { label: "Proveedores", href: "/proveedores", icon: "Truck", module: "clientes" as ModuleName, section: "secundaria" as const },
-  { label: "Reportes", href: "/reportes", icon: "BarChart3", module: "reportes" as ModuleName, section: "secundaria" as const },
-  { label: "Wiki", href: "/wiki", icon: "BookOpen", module: "wiki" as ModuleName, section: "secundaria" as const },
+export const NAV_ITEMS: NavItem[] = [
+  // Sección principal — operación diaria
+  { label: "Dashboard", href: "/", icon: "LayoutDashboard", module: "dashboard", section: "principal" },
+  { label: "Ventas", href: "/ventas", icon: "DollarSign", module: "ventas", section: "principal" },
+  { label: "Facturación", href: "/facturacion", icon: "Receipt", module: "facturacion", section: "principal" },
+  { label: "Inventario", href: "/inventario", icon: "Package", module: "inventario", section: "principal" },
+  { label: "Materias Primas", href: "/materias-primas", icon: "Layers", module: "materias_primas", section: "principal" },
+  { label: "Gastos", href: "/gastos", icon: "TrendingDown", module: "gastos", section: "principal" },
+  { label: "Caja y Banco", href: "/caja", icon: "Landmark", module: "caja", section: "principal" },
+  { label: "Cuentas", href: "/cuentas", icon: "ClipboardList", module: "cuentas", section: "principal" },
+  { label: "Socios", href: "/socios", icon: "Users", module: "socios", section: "principal" },
+
+  // Sección secundaria — gestión y herramientas
+  { label: "Herramientas", href: "/herramientas", icon: "Wrench", module: "herramientas", section: "secundaria" },
+  { label: "Pautas", href: "/pautas", icon: "Megaphone", module: "pautas", section: "secundaria" },
+  { label: "Clientes", href: "/clientes", icon: "UserCircle", module: "clientes", section: "secundaria" },
+  { label: "Proveedores", href: "/proveedores", icon: "Truck", module: "clientes", section: "secundaria" },
+  { label: "Reportes", href: "/reportes", icon: "BarChart3", module: "reportes", section: "secundaria" },
+  { label: "Wiki", href: "/wiki", icon: "BookOpen", module: "wiki", section: "secundaria" },
 
   // Admin
-  { label: "Configuración", href: "/configuracion", icon: "Settings", module: "configuracion" as ModuleName, section: "admin" as const },
+  { label: "Configuración", href: "/configuracion", icon: "Settings", module: "configuracion", section: "admin", adminOnly: true },
 ]
+
+// Etiquetas legibles de cada sección del sidebar
+export const NAV_SECTIONS: Record<NavItem["section"], string> = {
+  principal: "Operación",
+  secundaria: "Gestión",
+  admin: "Administración",
+}
 
 // ===== Permisos por defecto según rol =====
 export const DEFAULT_PERMISSIONS: Record<string, ModulePermissions> = {

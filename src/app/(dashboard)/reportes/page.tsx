@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { FileSpreadsheet, FileText, Loader2 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { toast } from "sonner"
-import { PageHeader } from "@/components/shared/page-header"
+import { PageShell } from "@/components/shared/page-shell"
 import { PeriodSelector } from "@/components/shared/period-selector"
+import { StatCardGridSkeleton, TableSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
 import { type PeriodKey, getDateRange, toLocalDate } from "@/lib/date-periods"
 import { ReportResumen } from "./report-resumen"
@@ -229,9 +230,11 @@ export default function ReportesPage() {
   }
 
   return (
-    <div>
-      <PageHeader title="Reportes" description="Reportes financieros y operativos">
-        <div className="flex gap-2">
+    <PageShell
+      title="Reportes"
+      description="Reportes financieros y operativos"
+      actions={
+        <>
           <Button variant="outline" onClick={handleExportExcel} disabled={loading || !!exporting}>
             {exporting === "excel" ? <Loader2 size={16} className="mr-1.5 animate-spin" /> : <FileSpreadsheet size={16} className="mr-1.5" />}
             Excel
@@ -240,23 +243,21 @@ export default function ReportesPage() {
             {exporting === "pdf" ? <Loader2 size={16} className="mr-1.5 animate-spin" /> : <FileText size={16} className="mr-1.5" />}
             PDF
           </Button>
-        </div>
-      </PageHeader>
-
+        </>
+      }
+    >
       {/* Period selector */}
-      <div className="mb-4">
-        <PeriodSelector
-          selectedPeriod={period}
-          onPeriodChange={setPeriod}
-          customFrom={customFrom}
-          onCustomFromChange={setCustomFrom}
-          customTo={customTo}
-          onCustomToChange={setCustomTo}
-        />
-      </div>
+      <PeriodSelector
+        selectedPeriod={period}
+        onPeriodChange={setPeriod}
+        customFrom={customFrom}
+        onCustomFromChange={setCustomFrom}
+        customTo={customTo}
+        onCustomToChange={setCustomTo}
+      />
 
       {/* Tabs */}
-      <div className="bg-muted p-1 rounded-lg inline-flex gap-1 mb-6">
+      <div className="bg-cream p-1 rounded-lg inline-flex gap-1">
         {TABS.map((tab) => (
           <button
             key={tab.key}
@@ -274,8 +275,9 @@ export default function ReportesPage() {
 
       {/* Report content */}
       {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 size={28} className="animate-spin text-gold" />
+        <div className="space-y-6">
+          <StatCardGridSkeleton count={4} />
+          <TableSkeleton rows={8} cols={5} />
         </div>
       ) : (
         <div ref={reportRef} id="report-content">
@@ -306,6 +308,6 @@ export default function ReportesPage() {
           )}
         </div>
       )}
-    </div>
+    </PageShell>
   )
 }

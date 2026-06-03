@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
@@ -24,6 +25,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { RAW_MATERIAL_CATEGORIES } from "@/lib/constants"
 import type { RawMaterial, RawMaterialUnit, Supplier } from "@/lib/types"
 import { SupplierFormDialog } from "@/app/(dashboard)/proveedores/supplier-form-dialog"
@@ -57,7 +63,7 @@ export function MaterialFormDialog({
   const [unit, setUnit] = useState<RawMaterialUnit>("unidades")
   const [initialStock, setInitialStock] = useState("")
   const [minStockAlert, setMinStockAlert] = useState("")
-  const [costPerUnit, setCostPerUnit] = useState("")
+  const [costPerUnit, setCostPerUnit] = useState<number | null>(null)
   const [supplierId, setSupplierId] = useState("")
   const [isActive, setIsActive] = useState(true)
   const [loading, setLoading] = useState(false)
@@ -90,7 +96,7 @@ export function MaterialFormDialog({
       setUnit(material.unit)
       setInitialStock("")
       setMinStockAlert(String(material.min_stock_alert))
-      setCostPerUnit(String(material.cost_per_unit))
+      setCostPerUnit(material.cost_per_unit)
       setSupplierId(material.supplier_id || "")
       setIsActive(material.is_active)
     } else {
@@ -100,7 +106,7 @@ export function MaterialFormDialog({
       setUnit("unidades")
       setInitialStock("")
       setMinStockAlert("10")
-      setCostPerUnit("")
+      setCostPerUnit(null)
       setSupplierId("")
       setIsActive(true)
     }
@@ -117,7 +123,7 @@ export function MaterialFormDialog({
     setLoading(true)
 
     try {
-      const cost = costPerUnit ? parseFloat(costPerUnit) : 0
+      const cost = costPerUnit ?? 0
       const minAlert = minStockAlert ? parseInt(minStockAlert) : 10
 
       if (isEditing && material) {
@@ -301,13 +307,11 @@ export function MaterialFormDialog({
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="mat-cost">Costo unitario (COP)</Label>
-                <Input
+                <MoneyInput
                   id="mat-cost"
-                  type="number"
-                  min="0"
                   placeholder="0"
                   value={costPerUnit}
-                  onChange={(e) => setCostPerUnit(e.target.value)}
+                  onValueChange={setCostPerUnit}
                   disabled={loading}
                 />
               </div>
@@ -330,16 +334,20 @@ export function MaterialFormDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="shrink-0"
-                  onClick={() => setShowSupplierForm(true)}
-                  title="Crear proveedor"
-                >
-                  <Plus size={16} />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="shrink-0"
+                      onClick={() => setShowSupplierForm(true)}
+                    >
+                      <Plus size={16} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Crear proveedor</TooltipContent>
+                </Tooltip>
               </div>
             </div>
 

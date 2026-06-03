@@ -1,19 +1,16 @@
 "use client"
 
 import { useEffect, useState, useCallback, useMemo } from "react"
-import {
-  ClipboardList,
-  Search,
-  CreditCard,
-} from "lucide-react"
+import { ClipboardList, CreditCard, AlertTriangle } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { PageShell } from "@/components/shared/page-shell"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -21,15 +18,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { formatCOP, formatDateShort } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { ACCOUNT_STATUS_LABELS } from "@/lib/constants"
 import { PaymentDialog, type CxCExpanded, type CxPExpanded } from "./payment-dialog"
 
@@ -37,6 +27,18 @@ import { PaymentDialog, type CxCExpanded, type CxPExpanded } from "./payment-dia
 // Config
 // ═══════════════════════════════════════════════════════════
 type TabKey = "por_cobrar" | "por_pagar"
+
+/**
+ * Una cuenta está vencida cuando su fecha de vencimiento ya pasó y aún queda
+ * saldo pendiente. No depende del campo `status` (que puede no haberse
+ * recalculado en BD), así que se evalúa siempre sobre la fecha real.
+ */
+function isOverdue(dueDate: string | null | undefined, remaining: number): boolean {
+  if (!dueDate || remaining <= 0) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return new Date(dueDate) < today
+}
 
 // ═══════════════════════════════════════════════════════════
 // Page Component
@@ -55,10 +57,12 @@ export default function CuentasPage() {
 
   // === Filters CxC ===
   const [searchCxC, setSearchCxC] = useState("")
+  const debouncedSearchCxC = useDebounce(searchCxC, 250)
   const [statusFilterCxC, setStatusFilterCxC] = useState("all")
 
   // === Filters CxP ===
   const [searchCxP, setSearchCxP] = useState("")
+  const debouncedSearchCxP = useDebounce(searchCxP, 250)
   const [statusFilterCxP, setStatusFilterCxP] = useState("all")
 
   // === Dialog ===
@@ -117,37 +121,57 @@ export default function CuentasPage() {
 
   // ═══════════════════════════════════════════════════════════
   // Filtered data
+  // El filtro de estado "overdue" usa la fecha real de vencimiento.
   // ═══════════════════════════════════════════════════════════
   const filteredCxC = useMemo(() => {
     return receivables.filter((r) => {
-      if (searchCxC) {
-        const q = searchCxC.toLowerCase()
+      if (debouncedSearchCxC) {
+        const q = debouncedSearchCxC.toLowerCase()
         const matchClient = r.client?.full_name?.toLowerCase().includes(q)
         const matchInvoice = r.sale?.invoice_number?.toLowerCase().includes(q)
         if (!matchClient && !matchInvoice) return false
       }
-      if (statusFilterCxC !== "all" && r.status !== statusFilterCxC) return false
+      if (statusFilterCxC !== "all") {
+        if (statusFilterCxC === "overdue") {
+          if (!isOverdue(r.due_date, r.remaining_amount)) return false
+        } else if (r.status !== statusFilterCxC) {
+          return false
+        }
+      }
       return true
     })
-  }, [receivables, searchCxC, statusFilterCxC])
+  }, [receivables, debouncedSearchCxC, statusFilterCxC])
 
   const filteredCxP = useMemo(() => {
     return payables.filter((p) => {
-      if (searchCxP) {
-        const q = searchCxP.toLowerCase()
+      if (debouncedSearchCxP) {
+        const q = debouncedSearchCxP.toLowerCase()
         const matchSupplier = p.supplier?.name?.toLowerCase().includes(q)
         const matchConcept = p.expense?.concept?.toLowerCase().includes(q)
         if (!matchSupplier && !matchConcept) return false
       }
-      if (statusFilterCxP !== "all" && p.status !== statusFilterCxP) return false
+      if (statusFilterCxP !== "all") {
+        if (statusFilterCxP === "overdue") {
+          if (!isOverdue(p.due_date, p.remaining_amount)) return false
+        } else if (p.status !== statusFilterCxP) {
+          return false
+        }
+      }
       return true
     })
-  }, [payables, searchCxP, statusFilterCxP])
+  }, [payables, debouncedSearchCxP, statusFilterCxP])
 
   // ═══════════════════════════════════════════════════════════
   // Stats (memoizados)
   // ═══════════════════════════════════════════════════════════
-  const { pendingCxC, pendingCxP, totalCxCPending, totalCxPPending } = useMemo(() => {
+  const {
+    pendingCxC,
+    pendingCxP,
+    totalCxCPending,
+    totalCxPPending,
+    overdueCxCCount,
+    overdueCxPCount,
+  } = useMemo(() => {
     const pendingCxC = receivables.filter((r) => r.status !== "paid")
     const pendingCxP = payables.filter((p) => p.status !== "paid")
     return {
@@ -155,41 +179,250 @@ export default function CuentasPage() {
       pendingCxP,
       totalCxCPending: pendingCxC.reduce((s, r) => s + r.remaining_amount, 0),
       totalCxPPending: pendingCxP.reduce((s, p) => s + p.remaining_amount, 0),
+      overdueCxCCount: receivables.filter((r) => isOverdue(r.due_date, r.remaining_amount)).length,
+      overdueCxPCount: payables.filter((p) => isOverdue(p.due_date, p.remaining_amount)).length,
     }
   }, [receivables, payables])
 
   // ═══════════════════════════════════════════════════════════
   // Handlers
   // ═══════════════════════════════════════════════════════════
-  const handleAbonarCxC = (r: CxCExpanded) => {
+  const handleAbonarCxC = useCallback((r: CxCExpanded) => {
     setSelectedCxC(r)
     setSelectedCxP(null)
     setPaymentType("receivable")
     setShowPayment(true)
-  }
+  }, [])
 
-  const handleAbonarCxP = (p: CxPExpanded) => {
+  const handleAbonarCxP = useCallback((p: CxPExpanded) => {
     setSelectedCxP(p)
     setSelectedCxC(null)
     setPaymentType("payable")
     setShowPayment(true)
-  }
+  }, [])
 
   const fetchAll = () => {
     fetchReceivables()
     fetchPayables()
   }
 
+  // === Filtros activos / limpiar (por pestaña activa) ===
+  const hasActiveFiltersCxC = !!searchCxC || statusFilterCxC !== "all"
+  const hasActiveFiltersCxP = !!searchCxP || statusFilterCxP !== "all"
+  const clearFiltersCxC = () => {
+    setSearchCxC("")
+    setStatusFilterCxC("all")
+  }
+  const clearFiltersCxP = () => {
+    setSearchCxP("")
+    setStatusFilterCxP("all")
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Columnas declarativas — compartidas entre CxC y CxP.
+  // Una sola fábrica genérica evita duplicar el JSX de ambas tablas.
+  // ═══════════════════════════════════════════════════════════
+  function buildColumns<T extends CxCExpanded | CxPExpanded>(opts: {
+    primaryHeader: string
+    primaryValue: (row: T) => string
+    secondaryHeader: string
+    secondaryValue: (row: T) => string
+    pendingTotal: number
+    onAbonar: (row: T) => void
+  }): Column<T>[] {
+    return [
+      {
+        key: "primary",
+        header: opts.primaryHeader,
+        sortAccessor: (r) => opts.primaryValue(r),
+        cell: (r) => {
+          const overdue = isOverdue(r.due_date, r.remaining_amount)
+          return (
+            <span className="flex items-center gap-1.5 font-medium text-foreground">
+              {opts.primaryValue(r)}
+              {overdue && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <AlertTriangle size={13} className="text-error" />
+                  </TooltipTrigger>
+                  <TooltipContent>Cuenta vencida</TooltipContent>
+                </Tooltip>
+              )}
+            </span>
+          )
+        },
+      },
+      {
+        key: "secondary",
+        header: opts.secondaryHeader,
+        className: "text-muted-foreground hidden md:table-cell",
+        sortAccessor: (r) => opts.secondaryValue(r),
+        cell: (r) => opts.secondaryValue(r),
+      },
+      {
+        key: "total",
+        header: "Total",
+        align: "right",
+        sortAccessor: (r) => r.total_amount,
+        cell: (r) => formatCOP(r.total_amount),
+      },
+      {
+        key: "paid",
+        header: "Pagado",
+        align: "right",
+        className: "hidden lg:table-cell",
+        sortAccessor: (r) => r.paid_amount,
+        cell: (r) => (
+          <span className="font-medium text-success">{formatCOP(r.paid_amount)}</span>
+        ),
+      },
+      {
+        key: "remaining",
+        header: "Pendiente",
+        align: "right",
+        sortAccessor: (r) => r.remaining_amount,
+        cell: (r) => (
+          <span className="font-medium text-error">{formatCOP(r.remaining_amount)}</span>
+        ),
+        footer: (
+          <span className="text-error">{formatCOP(opts.pendingTotal)}</span>
+        ),
+      },
+      {
+        key: "progress",
+        header: "Progreso",
+        className: "w-[140px] hidden sm:table-cell",
+        sortAccessor: (r) =>
+          r.total_amount > 0 ? r.paid_amount / r.total_amount : 0,
+        cell: (r) => {
+          const pct = r.total_amount > 0
+            ? Math.round((r.paid_amount / r.total_amount) * 100)
+            : 0
+          const isPaid = r.status === "paid" || r.remaining_amount <= 0
+          return (
+            <div className="flex items-center gap-2">
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-border">
+                <div
+                  className={`h-full rounded-full transition-all ${isPaid ? "bg-success" : "bg-gold"}`}
+                  style={{ width: `${Math.min(100, pct)}%` }}
+                />
+              </div>
+              <span className="w-8 text-right text-xs tabular-nums text-muted-foreground">
+                {pct}%
+              </span>
+            </div>
+          )
+        },
+      },
+      {
+        key: "due",
+        header: "Vence",
+        sortAccessor: (r) => r.due_date ?? "",
+        cell: (r) => {
+          const overdue = isOverdue(r.due_date, r.remaining_amount)
+          if (!r.due_date) return <span className="text-muted-foreground">—</span>
+          return (
+            <span className={overdue ? "font-semibold text-error" : "text-muted-foreground"}>
+              {formatDateShort(r.due_date)}
+            </span>
+          )
+        },
+      },
+      {
+        key: "status",
+        header: "Estado",
+        align: "center",
+        cell: (r) => {
+          const overdue = isOverdue(r.due_date, r.remaining_amount)
+          const status = overdue ? "overdue" : r.status
+          return (
+            <StatusBadge
+              status={status as "pending" | "partial" | "paid" | "overdue"}
+              label={ACCOUNT_STATUS_LABELS[status] || status}
+            />
+          )
+        },
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (r) => {
+          const isPaid = r.status === "paid" || r.remaining_amount <= 0
+          if (isPaid) return null
+          return (
+            <div onClick={(e) => e.stopPropagation()}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-gold hover:text-gold"
+                    onClick={() => opts.onAbonar(r)}
+                  >
+                    <CreditCard size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Registrar abono</TooltipContent>
+              </Tooltip>
+            </div>
+          )
+        },
+      },
+    ]
+  }
+
+  const cxcPendingFilteredTotal = useMemo(
+    () =>
+      filteredCxC
+        .filter((r) => r.status !== "paid")
+        .reduce((s, r) => s + r.remaining_amount, 0),
+    [filteredCxC]
+  )
+  const cxpPendingFilteredTotal = useMemo(
+    () =>
+      filteredCxP
+        .filter((p) => p.status !== "paid")
+        .reduce((s, p) => s + p.remaining_amount, 0),
+    [filteredCxP]
+  )
+
+  const cxcColumns = useMemo<Column<CxCExpanded>[]>(
+    () =>
+      buildColumns<CxCExpanded>({
+        primaryHeader: "Cliente",
+        primaryValue: (r) => r.client?.full_name || "—",
+        secondaryHeader: "Factura",
+        secondaryValue: (r) => r.sale?.invoice_number || "—",
+        pendingTotal: cxcPendingFilteredTotal,
+        onAbonar: handleAbonarCxC,
+      }),
+    [cxcPendingFilteredTotal, handleAbonarCxC]
+  )
+
+  const cxpColumns = useMemo<Column<CxPExpanded>[]>(
+    () =>
+      buildColumns<CxPExpanded>({
+        primaryHeader: "Proveedor",
+        primaryValue: (p) => p.supplier?.name || "—",
+        secondaryHeader: "Concepto",
+        secondaryValue: (p) => p.expense?.concept || "—",
+        pendingTotal: cxpPendingFilteredTotal,
+        onAbonar: handleAbonarCxP,
+      }),
+    [cxpPendingFilteredTotal, handleAbonarCxP]
+  )
+
   // ═══════════════════════════════════════════════════════════
   // Render
   // ═══════════════════════════════════════════════════════════
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <PageHeader title="Cuentas" description="Cuentas por cobrar y por pagar" />
-
+    <PageShell
+      title="Cuentas"
+      description="Cuentas por cobrar y por pagar"
+    >
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="CxC pendiente"
           value={totalCxCPending}
@@ -197,14 +430,11 @@ export default function CuentasPage() {
           format="currency"
           borderColor="warning"
           delay={0}
-        />
-        <StatCard
-          label="# CxC activas"
-          value={pendingCxC.length}
-          icon="Users"
-          format="number"
-          borderColor="gold"
-          delay={1}
+          hint={`${pendingCxC.length} activa${pendingCxC.length !== 1 ? "s" : ""}${
+            overdueCxCCount > 0 ? ` · ${overdueCxCCount} vencida${overdueCxCCount !== 1 ? "s" : ""}` : ""
+          }`}
+          active={activeTab === "por_cobrar"}
+          onClick={() => setActiveTab("por_cobrar")}
         />
         <StatCard
           label="CxP pendiente"
@@ -212,36 +442,38 @@ export default function CuentasPage() {
           icon="TrendingDown"
           format="currency"
           borderColor="error"
-          delay={2}
+          delay={1}
+          hint={`${pendingCxP.length} activa${pendingCxP.length !== 1 ? "s" : ""}${
+            overdueCxPCount > 0 ? ` · ${overdueCxPCount} vencida${overdueCxPCount !== 1 ? "s" : ""}` : ""
+          }`}
+          active={activeTab === "por_pagar"}
+          onClick={() => setActiveTab("por_pagar")}
         />
         <StatCard
-          label="# CxP activas"
-          value={pendingCxP.length}
-          icon="ShoppingCart"
+          label="Balance neto"
+          value={Math.abs(totalCxCPending - totalCxPPending)}
+          icon="Wallet"
+          format="currency"
+          borderColor={totalCxCPending - totalCxPPending >= 0 ? "success" : "error"}
+          delay={2}
+          hint={totalCxCPending - totalCxPPending >= 0 ? "A favor (nos deben más)" : "En contra (debemos más)"}
+        />
+        <StatCard
+          label="Cuentas vencidas"
+          value={overdueCxCCount + overdueCxPCount}
+          icon="TrendingDown"
           format="number"
-          borderColor="info"
+          borderColor="error"
           delay={3}
+          hint={`${overdueCxCCount} por cobrar · ${overdueCxPCount} por pagar`}
         />
       </div>
 
-      {/* Balance neto */}
-      {(totalCxCPending > 0 || totalCxPPending > 0) && (
-        <div className="-mt-4 pl-1">
-          <p className="text-xs text-muted-foreground">
-            Balance neto:{" "}
-            <span className={`font-semibold ${totalCxCPending - totalCxPPending >= 0 ? "text-success" : "text-error"}`}>
-              {totalCxCPending - totalCxPPending >= 0 ? "+" : ""}{formatCOP(totalCxCPending - totalCxPPending)}
-            </span>
-            <span className="ml-1 text-muted-foreground">(nos deben − debemos)</span>
-          </p>
-        </div>
-      )}
-
       {/* Tabs */}
-      <div className="flex gap-1 bg-muted p-1 rounded-lg w-fit">
+      <div className="flex w-fit gap-1 rounded-lg bg-cream p-1">
         <button
           onClick={() => setActiveTab("por_cobrar")}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+          className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === "por_cobrar"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
@@ -249,14 +481,14 @@ export default function CuentasPage() {
         >
           Por Cobrar
           {pendingCxC.length > 0 && (
-            <span className="ml-2 px-1.5 py-0.5 rounded-full bg-warning/10 text-warning text-xs font-semibold">
+            <span className="ml-2 rounded-full bg-warning/10 px-1.5 py-0.5 text-xs font-semibold text-warning">
               {pendingCxC.length}
             </span>
           )}
         </button>
         <button
           onClick={() => setActiveTab("por_pagar")}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+          className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === "por_pagar"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
@@ -264,7 +496,7 @@ export default function CuentasPage() {
         >
           Por Pagar
           {pendingCxP.length > 0 && (
-            <span className="ml-2 px-1.5 py-0.5 rounded-full bg-error/10 text-error text-xs font-semibold">
+            <span className="ml-2 rounded-full bg-error/10 px-1.5 py-0.5 text-xs font-semibold text-error">
               {pendingCxP.length}
             </span>
           )}
@@ -276,20 +508,20 @@ export default function CuentasPage() {
       {/* ═══════════════════════════════════════════════════════════ */}
       {activeTab === "por_cobrar" && (
         <div className="space-y-4">
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-xs">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Buscar cliente, factura..."
+          <FilterBar
+            search={
+              <SearchInput
                 value={searchCxC}
-                onChange={(e) => setSearchCxC(e.target.value)}
-                className="pl-9 h-9"
+                onValueChange={setSearchCxC}
+                placeholder="Buscar cliente, factura..."
+                wrapperClassName="max-w-xs"
               />
-            </div>
-
+            }
+            hasActiveFilters={hasActiveFiltersCxC}
+            onClear={clearFiltersCxC}
+          >
             <Select value={statusFilterCxC} onValueChange={setStatusFilterCxC}>
-              <SelectTrigger className="w-[160px] h-9">
+              <SelectTrigger className="h-9 w-[160px]">
                 <SelectValue placeholder="Estado" />
               </SelectTrigger>
               <SelectContent>
@@ -300,117 +532,22 @@ export default function CuentasPage() {
                 <SelectItem value="overdue">Vencidas</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </FilterBar>
 
-          {/* Table CxC */}
-          {loadingCxC ? (
-            <div className="space-y-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          ) : filteredCxC.length === 0 ? (
-            <EmptyState
-              icon={ClipboardList}
-              title="Sin cuentas por cobrar"
-              description="Las cuentas por cobrar se crean al registrar ventas a crédito."
-            />
-          ) : (
-            <div className="bg-card rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-cream hover:bg-cream">
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Cliente</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[110px]">Factura</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[100px]">Total</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[100px]">Pagado</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[100px]">Pendiente</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[120px]">Progreso</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[90px]">Vence</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[90px]">Estado</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[70px] text-center">Acción</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredCxC.map((r) => {
-                    const pct = r.total_amount > 0
-                      ? Math.round((r.paid_amount / r.total_amount) * 100)
-                      : 0
-                    const isPaid = r.status === "paid"
-
-                    return (
-                      <TableRow key={r.id} className="hover:bg-muted/50">
-                        <TableCell className="text-sm font-medium">
-                          {r.client?.full_name || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {r.sale?.invoice_number || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums">
-                          {formatCOP(r.total_amount)}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums text-success font-medium">
-                          {formatCOP(r.paid_amount)}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums text-error font-medium">
-                          {formatCOP(r.remaining_amount)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-border rounded-full h-2 overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${isPaid ? "bg-success" : "bg-gold"}`}
-                                style={{ width: `${Math.min(100, pct)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">
-                              {pct}%
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {r.due_date ? formatDateShort(r.due_date) : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge
-                            status={r.status as "pending" | "partial" | "paid" | "overdue"}
-                            label={ACCOUNT_STATUS_LABELS[r.status] || r.status}
-                          />
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {!isPaid && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8 text-gold hover:text-gold"
-                              onClick={() => handleAbonarCxC(r)}
-                              title="Registrar abono"
-                            >
-                              <CreditCard size={14} />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          {/* Footer CxC */}
-          {filteredCxC.length > 0 && (
-            <div className="flex items-center justify-between text-sm text-muted-foreground px-2">
-              <span>{filteredCxC.length} cuenta{filteredCxC.length !== 1 ? "s" : ""}</span>
-              <span className="font-semibold text-warning">
-                Pendiente: {formatCOP(
-                  filteredCxC
-                    .filter((r) => r.status !== "paid")
-                    .reduce((s, r) => s + r.remaining_amount, 0)
-                )}
-              </span>
-            </div>
-          )}
+          <DataTable
+            data={filteredCxC}
+            columns={cxcColumns}
+            rowKey={(r) => r.id}
+            loading={loadingCxC}
+            isFiltered={hasActiveFiltersCxC}
+            pageSize={25}
+            showFooter
+            empty={{
+              icon: ClipboardList,
+              title: "Sin cuentas por cobrar",
+              description: "Las cuentas por cobrar se crean al registrar ventas a crédito.",
+            }}
+          />
         </div>
       )}
 
@@ -419,20 +556,20 @@ export default function CuentasPage() {
       {/* ═══════════════════════════════════════════════════════════ */}
       {activeTab === "por_pagar" && (
         <div className="space-y-4">
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-xs">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Buscar proveedor, concepto..."
+          <FilterBar
+            search={
+              <SearchInput
                 value={searchCxP}
-                onChange={(e) => setSearchCxP(e.target.value)}
-                className="pl-9 h-9"
+                onValueChange={setSearchCxP}
+                placeholder="Buscar proveedor, concepto..."
+                wrapperClassName="max-w-xs"
               />
-            </div>
-
+            }
+            hasActiveFilters={hasActiveFiltersCxP}
+            onClear={clearFiltersCxP}
+          >
             <Select value={statusFilterCxP} onValueChange={setStatusFilterCxP}>
-              <SelectTrigger className="w-[160px] h-9">
+              <SelectTrigger className="h-9 w-[160px]">
                 <SelectValue placeholder="Estado" />
               </SelectTrigger>
               <SelectContent>
@@ -443,117 +580,22 @@ export default function CuentasPage() {
                 <SelectItem value="overdue">Vencidas</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </FilterBar>
 
-          {/* Table CxP */}
-          {loadingCxP ? (
-            <div className="space-y-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          ) : filteredCxP.length === 0 ? (
-            <EmptyState
-              icon={ClipboardList}
-              title="Sin cuentas por pagar"
-              description="Las cuentas por pagar se crean al registrar un gasto con la opción activada."
-            />
-          ) : (
-            <div className="bg-card rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-cream hover:bg-cream">
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Proveedor</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Concepto</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[100px]">Total</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[100px]">Pagado</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[100px]">Pendiente</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[120px]">Progreso</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[90px]">Vence</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[90px]">Estado</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[70px] text-center">Acción</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredCxP.map((p) => {
-                    const pct = p.total_amount > 0
-                      ? Math.round((p.paid_amount / p.total_amount) * 100)
-                      : 0
-                    const isPaid = p.status === "paid"
-
-                    return (
-                      <TableRow key={p.id} className="hover:bg-muted/50">
-                        <TableCell className="text-sm font-medium">
-                          {p.supplier?.name || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {p.expense?.concept || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums">
-                          {formatCOP(p.total_amount)}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums text-success font-medium">
-                          {formatCOP(p.paid_amount)}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums text-error font-medium">
-                          {formatCOP(p.remaining_amount)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-border rounded-full h-2 overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${isPaid ? "bg-success" : "bg-gold"}`}
-                                style={{ width: `${Math.min(100, pct)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">
-                              {pct}%
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {p.due_date ? formatDateShort(p.due_date) : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge
-                            status={p.status as "pending" | "partial" | "paid" | "overdue"}
-                            label={ACCOUNT_STATUS_LABELS[p.status] || p.status}
-                          />
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {!isPaid && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8 text-gold hover:text-gold"
-                              onClick={() => handleAbonarCxP(p)}
-                              title="Registrar abono"
-                            >
-                              <CreditCard size={14} />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          {/* Footer CxP */}
-          {filteredCxP.length > 0 && (
-            <div className="flex items-center justify-between text-sm text-muted-foreground px-2">
-              <span>{filteredCxP.length} cuenta{filteredCxP.length !== 1 ? "s" : ""}</span>
-              <span className="font-semibold text-error">
-                Pendiente: {formatCOP(
-                  filteredCxP
-                    .filter((p) => p.status !== "paid")
-                    .reduce((s, p) => s + p.remaining_amount, 0)
-                )}
-              </span>
-            </div>
-          )}
+          <DataTable
+            data={filteredCxP}
+            columns={cxpColumns}
+            rowKey={(p) => p.id}
+            loading={loadingCxP}
+            isFiltered={hasActiveFiltersCxP}
+            pageSize={25}
+            showFooter
+            empty={{
+              icon: ClipboardList,
+              title: "Sin cuentas por pagar",
+              description: "Las cuentas por pagar se crean al registrar un gasto con la opción activada.",
+            }}
+          />
         </div>
       )}
 
@@ -568,6 +610,6 @@ export default function CuentasPage() {
         payable={selectedCxP}
         onCompleted={fetchAll}
       />
-    </div>
+    </PageShell>
   )
 }

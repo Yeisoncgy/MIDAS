@@ -1,26 +1,29 @@
 "use client"
 
-import { useEffect, useState, useCallback, useMemo } from "react"
+import { Suspense, useEffect, useState, useCallback, useMemo } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   TrendingDown,
-  DollarSign,
-  ShoppingCart,
-  Search,
   Plus,
   Download,
   Pencil,
   Trash2,
   CreditCard,
+  List,
+  Wallet,
 } from "lucide-react"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { PageShell } from "@/components/shared/page-shell"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { ConfirmDialog } from "@/components/shared/confirm-dialog"
+import { PageSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -28,17 +31,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { formatCOP, formatDateShort } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { PAYMENT_METHODS } from "@/lib/constants"
-import { type PeriodKey, PERIODS, toLocalDate, getDateRange } from "@/lib/date-periods"
+import { type PeriodKey, toLocalDate, getDateRange } from "@/lib/date-periods"
 import type { Expense, ExpenseCategory } from "@/lib/types"
 import { PeriodSelector } from "@/components/shared/period-selector"
 import { ExpenseFormDialog } from "./expense-form-dialog"
@@ -58,11 +54,19 @@ type ExpenseExpanded = Omit<Expense, "category" | "supplier"> & {
   supplier?: { name: string }
 }
 
+const AP_STATUS_LABEL: Record<string, string> = {
+  pending: "Pendiente",
+  partial: "Parcial",
+  paid: "Pagada",
+  overdue: "Vencida",
+}
+
 // ═══════════════════════════════════════════════════════════
-// Page Component
+// Page Component (interno) — envuelto en <Suspense> por useSearchParams
 // ═══════════════════════════════════════════════════════════
-export default function GastosPage() {
+function GastosPageInner() {
   const supabase = createClient()
+  const params = useSearchParams()
 
   // === Tab ===
   const [activeTab, setActiveTab] = useState<TabKey>("gastos")
@@ -81,11 +85,13 @@ export default function GastosPage() {
 
   // === Filtros gastos ===
   const [searchExpense, setSearchExpense] = useState("")
+  const debouncedExpenseSearch = useDebounce(searchExpense, 250)
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [paymentMethodFilter, setPaymentMethodFilter] = useState("all")
 
   // === Filtros AP ===
   const [searchAP, setSearchAP] = useState("")
+  const debouncedAPSearch = useDebounce(searchAP, 250)
   const [statusFilter, setStatusFilter] = useState("all")
 
   // === Dialogs ===
@@ -93,9 +99,8 @@ export default function GastosPage() {
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null)
   const [showAPPayment, setShowAPPayment] = useState(false)
   const [selectedAccount, setSelectedAccount] = useState<AccountPayableExpanded | null>(null)
-
-  // === AP stats ===
-  const [apPendingTotal, setApPendingTotal] = useState(0)
+  const [expenseToDelete, setExpenseToDelete] = useState<ExpenseExpanded | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   // ═══════════════════════════════════════════════════════════
   // Fetch categories
@@ -171,12 +176,6 @@ export default function GastosPage() {
 
     if (data) {
       setAccounts(data as unknown as AccountPayableExpanded[])
-
-      // Calcular total pendiente
-      const pending = (data as unknown as AccountPayableExpanded[])
-        .filter((a) => a.status !== "paid")
-        .reduce((s, a) => s + a.remaining_amount, 0)
-      setApPendingTotal(pending)
     }
 
     setLoadingAccounts(false)
@@ -194,13 +193,21 @@ export default function GastosPage() {
     fetchExpenses()
   }, [fetchExpenses])
 
+  // Intent de creación desde el command palette (?nuevo=1)
+  useEffect(() => {
+    if (params.get("nuevo") === "1") {
+      setSelectedExpense(null)
+      setShowExpenseForm(true)
+    }
+  }, [params])
+
   // ═══════════════════════════════════════════════════════════
   // Filtered data
   // ═══════════════════════════════════════════════════════════
   const filteredExpenses = useMemo(() => {
     return expenses.filter((exp) => {
-      if (searchExpense) {
-        const q = searchExpense.toLowerCase()
+      if (debouncedExpenseSearch) {
+        const q = debouncedExpenseSearch.toLowerCase()
         const matchConcept = exp.concept.toLowerCase().includes(q)
         const matchSupplier = exp.supplier?.name?.toLowerCase().includes(q)
         const matchInvoice = exp.supplier_invoice_number?.toLowerCase().includes(q)
@@ -210,12 +217,12 @@ export default function GastosPage() {
       if (paymentMethodFilter !== "all" && exp.payment_method !== paymentMethodFilter) return false
       return true
     })
-  }, [expenses, searchExpense, categoryFilter, paymentMethodFilter])
+  }, [expenses, debouncedExpenseSearch, categoryFilter, paymentMethodFilter])
 
   const filteredAccounts = useMemo(() => {
     return accounts.filter((acc) => {
-      if (searchAP) {
-        const q = searchAP.toLowerCase()
+      if (debouncedAPSearch) {
+        const q = debouncedAPSearch.toLowerCase()
         const matchSupplier = acc.supplier?.name?.toLowerCase().includes(q)
         const matchConcept = acc.expense?.concept?.toLowerCase().includes(q)
         if (!matchSupplier && !matchConcept) return false
@@ -223,23 +230,35 @@ export default function GastosPage() {
       if (statusFilter !== "all" && acc.status !== statusFilter) return false
       return true
     })
-  }, [accounts, searchAP, statusFilter])
+  }, [accounts, debouncedAPSearch, statusFilter])
 
   // ═══════════════════════════════════════════════════════════
-  // Stats (memoizados)
+  // Stats (memoizados) — coherentes con el periodo y filtros activos
   // ═══════════════════════════════════════════════════════════
-  const totalGastos = useMemo(() => filteredExpenses.reduce((s, e) => s + e.amount, 0), [filteredExpenses])
+  const totalGastos = useMemo(
+    () => filteredExpenses.reduce((s, e) => s + e.amount, 0),
+    [filteredExpenses]
+  )
   const numGastos = filteredExpenses.length
 
+  // CxP pendientes — no dependen del periodo de gastos (deuda viva total)
+  const apPendingAccounts = useMemo(
+    () => accounts.filter((a) => a.status !== "paid"),
+    [accounts]
+  )
+  const apPendingTotal = useMemo(
+    () => apPendingAccounts.reduce((s, a) => s + a.remaining_amount, 0),
+    [apPendingAccounts]
+  )
+
   const categoryTop = useMemo(() => {
-    const totals: Record<string, { name: string; total: number }> = {}
+    const totals: Record<string, number> = {}
     filteredExpenses.forEach((e) => {
       const name = e.category?.name || "Otros"
-      if (!totals[name]) totals[name] = { name, total: 0 }
-      totals[name].total += e.amount
+      totals[name] = (totals[name] || 0) + e.amount
     })
-    const sorted = Object.values(totals).sort((a, b) => b.total - a.total)
-    return sorted[0]?.name || "—"
+    const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1])
+    return sorted[0]?.[0] || "—"
   }, [filteredExpenses])
 
   // ═══════════════════════════════════════════════════════════
@@ -255,14 +274,19 @@ export default function GastosPage() {
     setShowExpenseForm(true)
   }
 
-  const handleDeleteExpense = async (exp: ExpenseExpanded) => {
-    const { error } = await supabase.from("expenses").delete().eq("id", exp.id)
+  // Eliminación con confirmación (antes borraba al instante)
+  const handleConfirmDelete = async () => {
+    if (!expenseToDelete) return
+    setDeleting(true)
+    const { error } = await supabase.from("expenses").delete().eq("id", expenseToDelete.id)
     if (error) {
       toast.error("Error al eliminar gasto", { description: error.message })
     } else {
-      toast.success("Gasto eliminado", { description: exp.concept })
-      fetchExpenses()
+      toast.success("Gasto eliminado", { description: expenseToDelete.concept })
+      setExpenseToDelete(null)
+      fetchAll()
     }
+    setDeleting(false)
   }
 
   const handleAbonar = (acc: AccountPayableExpanded) => {
@@ -287,25 +311,315 @@ export default function GastosPage() {
     fetchAccounts()
   }
 
+  // === Filtros activos ===
+  const hasExpenseFilters =
+    !!searchExpense || categoryFilter !== "all" || paymentMethodFilter !== "all"
+  const clearExpenseFilters = () => {
+    setSearchExpense("")
+    setCategoryFilter("all")
+    setPaymentMethodFilter("all")
+  }
+
+  const hasAPFilters = !!searchAP || statusFilter !== "all"
+  const clearAPFilters = () => {
+    setSearchAP("")
+    setStatusFilter("all")
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Columnas: Gastos
+  // ═══════════════════════════════════════════════════════════
+  const expenseColumns = useMemo<Column<ExpenseExpanded>[]>(
+    () => [
+      {
+        key: "date",
+        header: "Fecha",
+        className: "w-[110px]",
+        sortAccessor: (e) => e.expense_date,
+        cell: (exp) => (
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {formatDateShort(exp.expense_date)}
+          </span>
+        ),
+      },
+      {
+        key: "concept",
+        header: "Concepto",
+        sortAccessor: (e) => e.concept,
+        cell: (exp) => (
+          <div>
+            <p className="text-sm font-medium text-foreground">{exp.concept}</p>
+            {exp.supplier?.name && (
+              <p className="text-xs text-muted-foreground">{exp.supplier.name}</p>
+            )}
+          </div>
+        ),
+      },
+      {
+        key: "category",
+        header: "Categoría",
+        className: "w-[150px]",
+        sortAccessor: (e) => e.category?.name ?? "",
+        cell: (exp) =>
+          exp.category ? (
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium">
+              <span
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: exp.category.color }}
+              />
+              {exp.category.name}
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">—</span>
+          ),
+      },
+      {
+        key: "amount",
+        header: "Monto",
+        align: "right",
+        className: "w-[130px]",
+        sortAccessor: (e) => e.amount,
+        cell: (exp) => (
+          <span className="font-semibold text-gold">{formatCOP(exp.amount)}</span>
+        ),
+        footer: formatCOP(totalGastos),
+      },
+      {
+        key: "method",
+        header: "Método",
+        className: "hidden md:table-cell w-[120px]",
+        sortAccessor: (e) => e.payment_method,
+        cell: (exp) => (
+          <span className="text-sm text-muted-foreground">
+            {PAYMENT_METHODS.find((m) => m.value === exp.payment_method)?.label ||
+              exp.payment_method}
+          </span>
+        ),
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        className: "w-[90px]",
+        cell: (exp) => (
+          <div
+            className="flex items-center justify-end gap-0.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => handleEditExpense(exp)}
+                >
+                  <Pencil size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Editar gasto</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-error hover:text-error"
+                  onClick={() => setExpenseToDelete(exp)}
+                >
+                  <Trash2 size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Eliminar gasto</TooltipContent>
+            </Tooltip>
+          </div>
+        ),
+      },
+    ],
+    [totalGastos]
+  )
+
+  // ═══════════════════════════════════════════════════════════
+  // Columnas: Cuentas por pagar
+  // ═══════════════════════════════════════════════════════════
+  const apTotalPendienteVisible = useMemo(
+    () =>
+      filteredAccounts
+        .filter((a) => a.status !== "paid")
+        .reduce((s, a) => s + a.remaining_amount, 0),
+    [filteredAccounts]
+  )
+
+  const apColumns = useMemo<Column<AccountPayableExpanded>[]>(
+    () => [
+      {
+        key: "supplier",
+        header: "Proveedor",
+        sortAccessor: (a) => a.supplier?.name ?? "",
+        cell: (acc) => (
+          <span className="text-sm font-medium text-foreground">
+            {acc.supplier?.name || "—"}
+          </span>
+        ),
+      },
+      {
+        key: "concept",
+        header: "Concepto",
+        className: "hidden md:table-cell",
+        sortAccessor: (a) => a.expense?.concept ?? "",
+        cell: (acc) => (
+          <span className="text-sm text-muted-foreground">
+            {acc.expense?.concept || "—"}
+          </span>
+        ),
+      },
+      {
+        key: "total",
+        header: "Total",
+        align: "right",
+        className: "w-[110px]",
+        sortAccessor: (a) => a.total_amount,
+        cell: (acc) => (
+          <span className="text-sm tabular-nums">{formatCOP(acc.total_amount)}</span>
+        ),
+      },
+      {
+        key: "paid",
+        header: "Pagado",
+        align: "right",
+        className: "hidden lg:table-cell w-[110px]",
+        sortAccessor: (a) => a.paid_amount,
+        cell: (acc) => (
+          <span className="text-sm font-medium tabular-nums text-success">
+            {formatCOP(acc.paid_amount)}
+          </span>
+        ),
+      },
+      {
+        key: "remaining",
+        header: "Pendiente",
+        align: "right",
+        className: "w-[120px]",
+        sortAccessor: (a) => a.remaining_amount,
+        cell: (acc) => (
+          <span className="text-sm font-semibold tabular-nums text-error">
+            {formatCOP(acc.remaining_amount)}
+          </span>
+        ),
+        footer: formatCOP(apTotalPendienteVisible),
+      },
+      {
+        key: "progress",
+        header: "Progreso",
+        className: "hidden md:table-cell w-[130px]",
+        sortAccessor: (a) =>
+          a.total_amount > 0 ? a.paid_amount / a.total_amount : 0,
+        cell: (acc) => {
+          const pct =
+            acc.total_amount > 0
+              ? Math.round((acc.paid_amount / acc.total_amount) * 100)
+              : 0
+          const isPaid = acc.status === "paid"
+          return (
+            <div className="flex items-center gap-2">
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-border">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    isPaid ? "bg-success" : "bg-gold"
+                  }`}
+                  style={{ width: `${Math.min(100, pct)}%` }}
+                />
+              </div>
+              <span className="w-8 text-right text-xs tabular-nums text-muted-foreground">
+                {pct}%
+              </span>
+            </div>
+          )
+        },
+      },
+      {
+        key: "due",
+        header: "Vence",
+        className: "hidden lg:table-cell w-[100px]",
+        sortAccessor: (a) => a.due_date ?? "",
+        cell: (acc) => (
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {acc.due_date ? formatDateShort(acc.due_date) : "—"}
+          </span>
+        ),
+      },
+      {
+        key: "status",
+        header: "Estado",
+        align: "center",
+        className: "w-[100px]",
+        cell: (acc) => (
+          <StatusBadge
+            status={acc.status as "pending" | "partial" | "paid" | "overdue"}
+            label={AP_STATUS_LABEL[acc.status] || acc.status}
+          />
+        ),
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        className: "w-[70px]",
+        cell: (acc) => {
+          if (acc.status === "paid") return null
+          return (
+            <div onClick={(e) => e.stopPropagation()}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-gold hover:text-gold"
+                    onClick={() => handleAbonar(acc)}
+                  >
+                    <CreditCard size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Registrar abono</TooltipContent>
+              </Tooltip>
+            </div>
+          )
+        },
+      },
+    ],
+    [apTotalPendienteVisible]
+  )
+
+  // ═══════════════════════════════════════════════════════════
+  // Loading inicial (primera carga)
+  // ═══════════════════════════════════════════════════════════
+  if (loadingExpenses && expenses.length === 0 && loadingAccounts && accounts.length === 0) {
+    return <PageSkeleton stats={4} rows={8} cols={6} />
+  }
+
+  const apPendingCount = apPendingAccounts.length
+
   // ═══════════════════════════════════════════════════════════
   // Render
   // ═══════════════════════════════════════════════════════════
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <PageHeader title="Gastos" description="Control de gastos y cuentas por pagar">
-        <Button variant="outline" size="sm" onClick={handleExport}>
-          <Download size={16} className="mr-1.5" />
-          Descargar reporte
-        </Button>
-        <Button size="sm" onClick={handleNewExpense}>
-          <Plus size={16} className="mr-1.5" />
-          Registrar gasto
-        </Button>
-      </PageHeader>
-
+    <PageShell
+      title="Gastos"
+      description="Control de gastos y cuentas por pagar"
+      actions={
+        <>
+          <Button variant="outline" size="sm" onClick={handleExport}>
+            <Download size={16} className="mr-1.5" />
+            Descargar reporte
+          </Button>
+          <Button size="sm" onClick={handleNewExpense}>
+            <Plus size={16} className="mr-1.5" />
+            Registrar gasto
+          </Button>
+        </>
+      }
+    >
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Total gastos"
           value={totalGastos}
@@ -313,6 +627,7 @@ export default function GastosPage() {
           format="currency"
           borderColor="error"
           delay={0}
+          hint={categoryTop !== "—" && numGastos > 0 ? `Mayor: ${categoryTop}` : undefined}
         />
         <StatCard
           label="# Gastos"
@@ -323,16 +638,19 @@ export default function GastosPage() {
           delay={1}
         />
         <StatCard
-          label="AP pendientes"
+          label="CxP pendientes"
           value={apPendingTotal}
           icon="Banknote"
           format="currency"
           borderColor="warning"
           delay={2}
+          hint={`${apPendingCount} cuenta${apPendingCount !== 1 ? "s" : ""}`}
+          active={activeTab === "cuentas_por_pagar"}
+          onClick={() => setActiveTab("cuentas_por_pagar")}
         />
         <StatCard
-          label="# Cuentas AP"
-          value={accounts.filter((a) => a.status !== "paid").length}
+          label="# Cuentas CxP"
+          value={apPendingCount}
           icon="DollarSign"
           format="number"
           borderColor="info"
@@ -340,39 +658,32 @@ export default function GastosPage() {
         />
       </div>
 
-      {/* Categoría top info */}
-      {categoryTop !== "—" && numGastos > 0 && (
-        <div className="-mt-4 pl-1">
-          <p className="text-xs text-muted-foreground">
-            Mayor gasto en: <span className="font-semibold text-foreground">{categoryTop}</span>
-          </p>
-        </div>
-      )}
-
       {/* Tabs */}
-      <div className="flex gap-1 bg-muted p-1 rounded-lg w-fit">
+      <div className="flex w-fit items-center gap-1 rounded-lg bg-cream p-1">
         <button
           onClick={() => setActiveTab("gastos")}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === "gastos"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
+          <List size={15} />
           Gastos
         </button>
         <button
           onClick={() => setActiveTab("cuentas_por_pagar")}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === "cuentas_por_pagar"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
           }`}
         >
+          <Wallet size={15} />
           Cuentas por Pagar
-          {accounts.filter((a) => a.status !== "paid").length > 0 && (
-            <span className="ml-2 px-1.5 py-0.5 rounded-full bg-warning/10 text-warning text-xs font-semibold">
-              {accounts.filter((a) => a.status !== "paid").length}
+          {apPendingCount > 0 && (
+            <span className="ml-1 rounded-full bg-warning/10 px-1.5 py-0.5 text-xs font-semibold text-warning">
+              {apPendingCount}
             </span>
           )}
         </button>
@@ -383,7 +694,6 @@ export default function GastosPage() {
       {/* ═══════════════════════════════════════════════════════════ */}
       {activeTab === "gastos" && (
         <div className="space-y-4">
-          {/* Period selector */}
           <PeriodSelector
             selectedPeriod={period}
             onPeriodChange={setPeriod}
@@ -393,20 +703,20 @@ export default function GastosPage() {
             onCustomToChange={setCustomTo}
           />
 
-          {/* Filtros */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-xs">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Buscar concepto, proveedor..."
+          <FilterBar
+            search={
+              <SearchInput
                 value={searchExpense}
-                onChange={(e) => setSearchExpense(e.target.value)}
-                className="pl-9 h-9"
+                onValueChange={setSearchExpense}
+                placeholder="Buscar concepto, proveedor..."
+                wrapperClassName="max-w-xs"
               />
-            </div>
-
+            }
+            hasActiveFilters={hasExpenseFilters}
+            onClear={clearExpenseFilters}
+          >
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-[180px] h-9">
+              <SelectTrigger className="h-9 w-[180px]">
                 <SelectValue placeholder="Categoría" />
               </SelectTrigger>
               <SelectContent>
@@ -415,7 +725,7 @@ export default function GastosPage() {
                   <SelectItem key={cat.id} value={cat.id}>
                     <span className="flex items-center gap-2">
                       <span
-                        className="size-2 rounded-full shrink-0"
+                        className="size-2 shrink-0 rounded-full"
                         style={{ backgroundColor: cat.color }}
                       />
                       {cat.name}
@@ -426,119 +736,41 @@ export default function GastosPage() {
             </Select>
 
             <Select value={paymentMethodFilter} onValueChange={setPaymentMethodFilter}>
-              <SelectTrigger className="w-[160px] h-9">
+              <SelectTrigger className="h-9 w-[160px]">
                 <SelectValue placeholder="Método pago" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos los métodos</SelectItem>
                 {PAYMENT_METHODS.map((pm) => (
-                  <SelectItem key={pm.value} value={pm.value}>{pm.label}</SelectItem>
+                  <SelectItem key={pm.value} value={pm.value}>
+                    {pm.label}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </FilterBar>
 
-          {/* Tabla de gastos */}
-          {loadingExpenses ? (
-            <div className="space-y-3">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          ) : filteredExpenses.length === 0 ? (
-            <EmptyState
-              icon={TrendingDown}
-              title="Sin gastos en este periodo"
-              description="Registra un gasto para comenzar a llevar el control."
-            />
-          ) : (
-            <div className="bg-card rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-cream hover:bg-cream">
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[100px]">Fecha</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Concepto</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[140px]">Categoría</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[120px]">Monto</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[110px]">Método</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[80px] text-center">Acciones</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredExpenses.map((exp) => (
-                    <TableRow
-                      key={exp.id}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => handleEditExpense(exp)}
-                    >
-                      <TableCell className="text-sm text-muted-foreground tabular-nums">
-                        {formatDateShort(exp.expense_date)}
-                      </TableCell>
-                      <TableCell>
-                        <div>
-                          <p className="text-sm font-medium text-foreground">{exp.concept}</p>
-                          {exp.supplier?.name && (
-                            <p className="text-xs text-muted-foreground">{exp.supplier.name}</p>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {exp.category && (
-                          <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                            <span
-                              className="size-2 rounded-full shrink-0"
-                              style={{ backgroundColor: exp.category.color }}
-                            />
-                            {exp.category.name}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span className="text-sm font-semibold text-gold tabular-nums">
-                          {formatCOP(exp.amount)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {PAYMENT_METHODS.find((m) => m.value === exp.payment_method)?.label || exp.payment_method}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8"
-                            onClick={() => handleEditExpense(exp)}
-                            title="Editar"
-                          >
-                            <Pencil size={14} />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-error hover:text-error"
-                            onClick={() => handleDeleteExpense(exp)}
-                            title="Eliminar"
-                          >
-                            <Trash2 size={14} />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          {/* Resumen */}
-          {filteredExpenses.length > 0 && (
-            <div className="flex items-center justify-between text-sm text-muted-foreground px-2">
-              <span>{filteredExpenses.length} gasto{filteredExpenses.length !== 1 ? "s" : ""}</span>
-              <span className="font-semibold text-foreground">
-                Total: {formatCOP(totalGastos)}
-              </span>
-            </div>
-          )}
+          <DataTable
+            data={filteredExpenses}
+            columns={expenseColumns}
+            rowKey={(e) => e.id}
+            loading={loadingExpenses}
+            onRowClick={handleEditExpense}
+            isFiltered={hasExpenseFilters}
+            pageSize={25}
+            showFooter
+            empty={{
+              icon: TrendingDown,
+              title: "Sin gastos en este periodo",
+              description: "Registra un gasto para comenzar a llevar el control.",
+              action: (
+                <Button size="sm" onClick={handleNewExpense}>
+                  <Plus size={16} className="mr-1.5" />
+                  Registrar gasto
+                </Button>
+              ),
+            }}
+          />
         </div>
       )}
 
@@ -547,20 +779,20 @@ export default function GastosPage() {
       {/* ═══════════════════════════════════════════════════════════ */}
       {activeTab === "cuentas_por_pagar" && (
         <div className="space-y-4">
-          {/* Filtros AP */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-xs">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Buscar proveedor, concepto..."
+          <FilterBar
+            search={
+              <SearchInput
                 value={searchAP}
-                onChange={(e) => setSearchAP(e.target.value)}
-                className="pl-9 h-9"
+                onValueChange={setSearchAP}
+                placeholder="Buscar proveedor, concepto..."
+                wrapperClassName="max-w-xs"
               />
-            </div>
-
+            }
+            hasActiveFilters={hasAPFilters}
+            onClear={clearAPFilters}
+          >
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[160px] h-9">
+              <SelectTrigger className="h-9 w-[160px]">
                 <SelectValue placeholder="Estado" />
               </SelectTrigger>
               <SelectContent>
@@ -571,124 +803,23 @@ export default function GastosPage() {
                 <SelectItem value="overdue">Vencidas</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </FilterBar>
 
-          {/* Tabla AP */}
-          {loadingAccounts ? (
-            <div className="space-y-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          ) : filteredAccounts.length === 0 ? (
-            <EmptyState
-              icon={CreditCard}
-              title="Sin cuentas por pagar"
-              description="Las cuentas por pagar se crean al registrar un gasto con la opción activada."
-            />
-          ) : (
-            <div className="bg-card rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-cream hover:bg-cream">
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Proveedor</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Concepto</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[110px]">Total</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[110px]">Pagado</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right w-[110px]">Pendiente</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[120px]">Progreso</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[100px]">Vence</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[90px]">Estado</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground w-[70px] text-center">Acción</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredAccounts.map((acc) => {
-                    const pct = acc.total_amount > 0
-                      ? Math.round((acc.paid_amount / acc.total_amount) * 100)
-                      : 0
-                    const isPaid = acc.status === "paid"
-
-                    return (
-                      <TableRow key={acc.id} className="hover:bg-muted/50">
-                        <TableCell className="text-sm font-medium">
-                          {acc.supplier?.name || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {acc.expense?.concept || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums">
-                          {formatCOP(acc.total_amount)}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums text-success font-medium">
-                          {formatCOP(acc.paid_amount)}
-                        </TableCell>
-                        <TableCell className="text-sm text-right tabular-nums text-error font-medium">
-                          {formatCOP(acc.remaining_amount)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-border rounded-full h-2 overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all ${
-                                  isPaid ? "bg-success" : "bg-gold"
-                                }`}
-                                style={{ width: `${Math.min(100, pct)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">
-                              {pct}%
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {acc.due_date ? formatDateShort(acc.due_date) : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge
-                            status={acc.status as "pending" | "partial" | "paid" | "overdue"}
-                            label={
-                              acc.status === "pending" ? "Pendiente" :
-                              acc.status === "partial" ? "Parcial" :
-                              acc.status === "paid" ? "Pagada" :
-                              acc.status === "overdue" ? "Vencida" : acc.status
-                            }
-                          />
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {!isPaid && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8 text-gold hover:text-gold"
-                              onClick={() => handleAbonar(acc)}
-                              title="Registrar abono"
-                            >
-                              <CreditCard size={14} />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          {/* Resumen AP */}
-          {filteredAccounts.length > 0 && (
-            <div className="flex items-center justify-between text-sm text-muted-foreground px-2">
-              <span>{filteredAccounts.length} cuenta{filteredAccounts.length !== 1 ? "s" : ""}</span>
-              <span className="font-semibold text-error">
-                Total pendiente: {formatCOP(
-                  filteredAccounts
-                    .filter((a) => a.status !== "paid")
-                    .reduce((s, a) => s + a.remaining_amount, 0)
-                )}
-              </span>
-            </div>
-          )}
+          <DataTable
+            data={filteredAccounts}
+            columns={apColumns}
+            rowKey={(a) => a.id}
+            loading={loadingAccounts}
+            isFiltered={hasAPFilters}
+            pageSize={25}
+            showFooter
+            empty={{
+              icon: CreditCard,
+              title: "Sin cuentas por pagar",
+              description:
+                "Las cuentas por pagar se crean al registrar un gasto con la opción activada.",
+            }}
+          />
         </div>
       )}
 
@@ -708,6 +839,34 @@ export default function GastosPage() {
         account={selectedAccount}
         onPaymentRegistered={fetchAll}
       />
-    </div>
+
+      <ConfirmDialog
+        open={!!expenseToDelete}
+        onOpenChange={(open) => !open && setExpenseToDelete(null)}
+        title="Eliminar gasto"
+        description={
+          expenseToDelete
+            ? `Se eliminará "${expenseToDelete.concept}" (${formatCOP(
+                expenseToDelete.amount
+              )}). Esta acción no se puede deshacer.`
+            : ""
+        }
+        confirmLabel="Eliminar"
+        variant="destructive"
+        loading={deleting}
+        onConfirm={handleConfirmDelete}
+      />
+    </PageShell>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// Default export — envuelve en <Suspense> por useSearchParams (Next 16)
+// ═══════════════════════════════════════════════════════════
+export default function GastosPage() {
+  return (
+    <Suspense fallback={<PageSkeleton stats={4} rows={8} cols={6} />}>
+      <GastosPageInner />
+    </Suspense>
   )
 }

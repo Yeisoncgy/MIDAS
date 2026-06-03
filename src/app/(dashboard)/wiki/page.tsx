@@ -1,18 +1,18 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   Plus,
-  Search,
   BookOpen,
   Pin,
+  PinOff,
   Pencil,
   Trash2,
   Archive,
   ArchiveRestore,
   Eye,
   EyeOff,
-  Loader2,
   ExternalLink,
   Copy,
   Check,
@@ -22,23 +22,34 @@ import {
   ListTodo,
   Link2,
   Palette,
-  Shield,
   Sparkles,
   CheckCircle2,
   Clock,
   CircleDot,
   ChevronDown,
   ChevronUp,
+  MoreHorizontal,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { useAuth } from "@/components/providers/auth-provider"
 import { ConfirmDialog } from "@/components/shared/confirm-dialog"
+import { PageShell } from "@/components/shared/page-shell"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { EmptyState } from "@/components/shared/empty-state"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { toast } from "sonner"
 import { formatRelativeTime } from "@/lib/format"
 import { WIKI_CATEGORIES } from "@/lib/constants"
+import { useDebounce } from "@/hooks/use-debounce"
 import { WikiEntryFormDialog } from "./wiki-entry-form-dialog"
 import type { WikiEntry, WikiCategory } from "@/lib/types"
 
@@ -81,13 +92,14 @@ const PRIORITY_CONFIG: Record<string, { label: string; className: string }> = {
   alta: { label: "Alta", className: "text-error bg-error/10" },
 }
 
-export default function WikiPage() {
+function WikiPageInner() {
   const supabase = createClient()
-  const { user } = useAuth()
+  const params = useSearchParams()
 
   const [entries, setEntries] = useState<WikiEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const debouncedSearch = useDebounce(search, 250)
   const [activeCategory, setActiveCategory] = useState<string>("todas")
   const [showArchived, setShowArchived] = useState(false)
 
@@ -134,6 +146,7 @@ export default function WikiPage() {
   }, [entries])
 
   const totalActive = useMemo(() => entries.filter((e) => !e.is_archived).length, [entries])
+  const archivedCount = useMemo(() => entries.filter((e) => e.is_archived).length, [entries])
 
   // Filtrado
   const filtered = useMemo(() => {
@@ -142,7 +155,7 @@ export default function WikiPage() {
       if (showArchived && !e.is_archived) return false
       if (activeCategory !== "todas" && e.category !== activeCategory) return false
 
-      const q = search.toLowerCase()
+      const q = debouncedSearch.toLowerCase()
       if (q) {
         const matchesTitle = e.title.toLowerCase().includes(q)
         const matchesContent = (e.content || "").toLowerCase().includes(q)
@@ -152,17 +165,28 @@ export default function WikiPage() {
 
       return true
     })
-  }, [entries, search, activeCategory, showArchived])
+  }, [entries, debouncedSearch, activeCategory, showArchived])
 
   const pinnedEntries = filtered.filter((e) => e.is_pinned)
   const unpinnedEntries = filtered.filter((e) => !e.is_pinned)
 
+  const hasActiveFilters = !!search || activeCategory !== "todas"
+  const clearFilters = () => {
+    setSearch("")
+    setActiveCategory("todas")
+  }
+
   // Actions
-  const openCreate = (category?: WikiCategory) => {
+  const openCreate = useCallback((category?: WikiCategory) => {
     setSelectedEntry(null)
     setDefaultCategory(category)
     setShowForm(true)
-  }
+  }, [])
+
+  // Intent de creación (?nuevo=1) desde el command palette
+  useEffect(() => {
+    if (params.get("nuevo") === "1") openCreate()
+  }, [params, openCreate])
 
   const openEdit = (entry: WikiEntry) => {
     setSelectedEntry(entry)
@@ -242,19 +266,29 @@ export default function WikiPage() {
             {isSecret && !isVisible ? "••••••••" : value}
           </span>
           {isSecret && (
-            <button
-              onClick={() => setVisiblePasswords((p) => ({ ...p, [fieldKey]: !p[fieldKey] }))}
-              className="p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground transition-all"
-            >
-              {isVisible ? <EyeOff size={13} /> : <Eye size={13} />}
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setVisiblePasswords((p) => ({ ...p, [fieldKey]: !p[fieldKey] }))}
+                  className="p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground transition-all"
+                >
+                  {isVisible ? <EyeOff size={13} /> : <Eye size={13} />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{isVisible ? "Ocultar" : "Mostrar"}</TooltipContent>
+            </Tooltip>
           )}
-          <button
-            onClick={() => copyToClipboard(value, fieldKey)}
-            className="p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground transition-all"
-          >
-            {copiedField === fieldKey ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => copyToClipboard(value, fieldKey)}
+                className="p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground transition-all"
+              >
+                {copiedField === fieldKey ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Copiar</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     )
@@ -302,6 +336,57 @@ export default function WikiPage() {
               >
                 {categoryConfig?.label}
               </span>
+            </div>
+
+            {/* Quick action: anclar (siempre visible) + menú accesible */}
+            <div className="flex items-center gap-0.5 shrink-0 -mr-1.5 -mt-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => togglePin(entry)}
+                    aria-label={entry.is_pinned ? "Desanclar entrada" : "Anclar entrada"}
+                    className={`p-1.5 rounded-lg hover:bg-black/5 transition-all ${entry.is_pinned ? "text-gold" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {entry.is_pinned ? <Pin size={15} className="fill-gold" /> : <Pin size={15} />}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{entry.is_pinned ? "Desanclar" : "Anclar"}</TooltipContent>
+              </Tooltip>
+
+              <DropdownMenu>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        aria-label="Más acciones"
+                        className="p-1.5 rounded-lg hover:bg-black/5 text-muted-foreground hover:text-foreground transition-all"
+                      >
+                        <MoreHorizontal size={15} />
+                      </button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>Acciones</TooltipContent>
+                </Tooltip>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem onClick={() => openEdit(entry)}>
+                    <Pencil size={14} />
+                    Editar
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => togglePin(entry)}>
+                    {entry.is_pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                    {entry.is_pinned ? "Desanclar" : "Anclar"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => toggleArchive(entry)}>
+                    {entry.is_archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+                    {entry.is_archived ? "Restaurar" : "Archivar"}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={() => confirmDelete(entry)}>
+                    <Trash2 size={14} />
+                    Eliminar
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 
@@ -404,79 +489,64 @@ export default function WikiPage() {
             <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
               {formatRelativeTime(entry.updated_at)}
             </span>
-            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all duration-300">
-              <button
-                onClick={() => togglePin(entry)}
-                className={`p-1.5 rounded-lg hover:bg-black/5 transition-all ${entry.is_pinned ? "text-gold" : "text-muted-foreground hover:text-foreground"}`}
-                title={entry.is_pinned ? "Desanclar" : "Anclar"}
-              >
-                <Pin size={14} className={entry.is_pinned ? "fill-gold" : ""} />
-              </button>
-              <button
-                onClick={() => openEdit(entry)}
-                className="p-1.5 rounded-lg hover:bg-black/5 text-muted-foreground hover:text-foreground transition-all"
-                title="Editar"
-              >
-                <Pencil size={14} />
-              </button>
-              <button
-                onClick={() => toggleArchive(entry)}
-                className="p-1.5 rounded-lg hover:bg-black/5 text-muted-foreground hover:text-foreground transition-all"
-                title={entry.is_archived ? "Restaurar" : "Archivar"}
-              >
-                {entry.is_archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-              </button>
-              <button
-                onClick={() => confirmDelete(entry)}
-                className="p-1.5 rounded-lg hover:bg-error/10 text-muted-foreground hover:text-error transition-all"
-                title="Eliminar"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
+            <button
+              onClick={() => openEdit(entry)}
+              className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground uppercase tracking-wider transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            >
+              <Pencil size={11} />
+              Editar
+            </button>
           </div>
         </div>
       </div>
     )
   }
 
+  // Skeleton de tarjetas
+  const cardsSkeleton = (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {[...Array(6)].map((_, i) => (
+        <div key={i} className="h-[200px] rounded-2xl skeleton-shimmer" />
+      ))}
+    </div>
+  )
+
   return (
-    <div className="space-y-6 md:space-y-8 animate-page-in pb-12">
-      {/* Hero Header */}
-      <div className="relative overflow-hidden rounded-3xl bg-white/40 backdrop-blur-3xl border border-white/60 shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-6 md:p-8 isolate group">
-        <div className="absolute top-0 right-0 -translate-y-12 translate-x-1/4 w-[400px] h-[400px] bg-gold/10 rounded-full blur-[80px] pointer-events-none group-hover:bg-gold/15 transition-colors duration-1000" />
-        <div className="absolute bottom-0 left-0 translate-y-1/2 -translate-x-1/4 w-[300px] h-[300px] bg-info/8 rounded-full blur-[60px] pointer-events-none" />
-
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 relative z-10">
-          <div>
-            <span className="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-gold/10 text-gold text-xs font-bold uppercase tracking-widest mb-3 border border-gold/20 shadow-sm">
-              <BookOpen size={12} /> Base de Conocimiento
-            </span>
-            <h1 className="font-[family-name:var(--font-display)] text-3xl md:text-4xl font-extrabold text-foreground tracking-tight">
-              Wiki <span className="bg-clip-text text-transparent bg-gradient-to-r from-gold to-[#B8923E]">Artemisa</span>
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1.5 font-medium">
-              Notas, credenciales, ideas y recursos del negocio
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowArchived(!showArchived)} className="bg-white/60 backdrop-blur-sm border-white/80 hover:bg-white/90">
-              {showArchived ? <ArchiveRestore size={15} className="mr-1.5" /> : <Archive size={15} className="mr-1.5" />}
-              {showArchived ? "Ver activos" : "Archivados"}
-            </Button>
-            <Button onClick={() => openCreate()} className="shadow-[0_4px_12px_rgba(201,165,92,0.3)]">
-              <Plus size={15} className="mr-1.5" />
-              Nueva entrada
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {/* Category Selector - Bento Pills */}
+    <PageShell
+      title="Wiki"
+      description="Base de conocimiento: notas, credenciales, ideas y recursos del negocio"
+      actions={
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowArchived(!showArchived)}
+          >
+            {showArchived ? (
+              <ArchiveRestore size={15} className="mr-1.5" />
+            ) : (
+              <Archive size={15} className="mr-1.5" />
+            )}
+            {showArchived ? "Ver activos" : "Archivados"}
+            {archivedCount > 0 && (
+              <span className="ml-1.5 rounded-full bg-muted-foreground/10 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
+                {archivedCount}
+              </span>
+            )}
+          </Button>
+          <Button size="sm" onClick={() => openCreate()}>
+            <Plus size={15} className="mr-1.5" />
+            Nueva entrada
+          </Button>
+        </>
+      }
+    >
+      {/* Category Selector - Bento Pills (clicables → filtran) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
         {/* All */}
         <button
           onClick={() => setActiveCategory("todas")}
+          aria-pressed={activeCategory === "todas"}
           className={`relative overflow-hidden rounded-2xl p-4 text-left transition-all duration-300 border group/cat ${
             activeCategory === "todas"
               ? "bg-white/90 border-gold/30 shadow-[0_4px_20px_rgba(201,165,92,0.15)] scale-[1.02]"
@@ -500,6 +570,7 @@ export default function WikiPage() {
             <button
               key={cat.value}
               onClick={() => setActiveCategory(cat.value)}
+              aria-pressed={isActive}
               className={`relative overflow-hidden rounded-2xl p-4 text-left transition-all duration-300 border group/cat ${
                 isActive
                   ? "bg-white/90 shadow-[0_4px_20px_rgba(0,0,0,0.08)] scale-[1.02]"
@@ -527,43 +598,43 @@ export default function WikiPage() {
         })}
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Buscar notas, credenciales, ideas..."
-          className="pl-10 h-11 bg-white/70 backdrop-blur-sm border-white/60 shadow-sm focus:shadow-gold rounded-xl text-sm"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      </div>
+      {/* Búsqueda + limpiar filtros */}
+      <FilterBar
+        search={
+          <SearchInput
+            value={search}
+            onValueChange={setSearch}
+            placeholder="Buscar notas, credenciales, ideas..."
+            wrapperClassName="max-w-md"
+          />
+        }
+        hasActiveFilters={hasActiveFilters}
+        onClear={clearFilters}
+      />
 
       {/* Content */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="h-[200px] rounded-2xl skeleton-shimmer" />
-          ))}
-        </div>
+        cardsSkeleton
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="p-5 rounded-3xl bg-gold/5 mb-5 border border-gold/10">
-            <BookOpen size={40} className="text-gold/40" />
-          </div>
-          <h3 className="text-lg font-bold text-foreground mb-1.5">
-            {showArchived ? "Sin entradas archivadas" : "Sin entradas"}
-          </h3>
-          <p className="text-sm text-muted-foreground max-w-md">
-            {entries.length === 0
-              ? "Crea tu primera entrada en el wiki para empezar a organizar la informacion de Casa Artemisa."
-              : "No se encontraron entradas con los filtros aplicados."}
-          </p>
-          {entries.length === 0 && (
-            <Button className="mt-5 shadow-[0_4px_12px_rgba(201,165,92,0.3)]" onClick={() => openCreate()}>
-              <Plus size={16} className="mr-1.5" />
-              Crear primera entrada
-            </Button>
-          )}
+        <div className="rounded-2xl border border-white/60 bg-white/50">
+          <EmptyState
+            icon={BookOpen}
+            title={showArchived ? "Sin entradas archivadas" : hasActiveFilters ? "Sin resultados" : "Sin entradas"}
+            description={
+              entries.length === 0
+                ? "Crea tu primera entrada en el wiki para empezar a organizar la informacion de Casa Artemisa."
+                : hasActiveFilters
+                  ? "No se encontraron entradas con los filtros aplicados. Prueba ajustarlos."
+                  : "No hay entradas en esta vista."
+            }
+          >
+            {entries.length === 0 && (
+              <Button onClick={() => openCreate()}>
+                <Plus size={16} className="mr-1.5" />
+                Crear primera entrada
+              </Button>
+            )}
+          </EmptyState>
         </div>
       ) : (
         <div className="space-y-6">
@@ -604,22 +675,33 @@ export default function WikiPage() {
         </div>
       )}
 
-      {/* Quick add floating buttons when viewing a specific category */}
+      {/* Quick add floating button when viewing a specific category */}
       {activeCategory !== "todas" && !loading && (
         <div className="fixed bottom-8 right-8 z-30">
-          <Button
-            onClick={() => openCreate(activeCategory as WikiCategory)}
-            className="h-14 w-14 rounded-2xl shadow-[0_8px_30px_rgba(201,165,92,0.4)] hover:shadow-[0_12px_40px_rgba(201,165,92,0.5)] hover:scale-110 transition-all duration-300 p-0"
-          >
-            <Plus size={24} />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={() => openCreate(activeCategory as WikiCategory)}
+                aria-label={`Nueva entrada en ${WIKI_CATEGORIES.find((c) => c.value === activeCategory)?.label || "esta categoría"}`}
+                className="h-14 w-14 rounded-2xl shadow-[0_8px_30px_rgba(201,165,92,0.4)] hover:shadow-[0_12px_40px_rgba(201,165,92,0.5)] hover:scale-110 transition-all duration-300 p-0"
+              >
+                <Plus size={24} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left">
+              Nueva en {WIKI_CATEGORIES.find((c) => c.value === activeCategory)?.label}
+            </TooltipContent>
+          </Tooltip>
         </div>
       )}
 
       {/* Form dialog */}
       <WikiEntryFormDialog
         open={showForm}
-        onOpenChange={setShowForm}
+        onOpenChange={(isOpen) => {
+          setShowForm(isOpen)
+          if (!isOpen) setSelectedEntry(null)
+        }}
         entry={selectedEntry}
         onCompleted={fetchEntries}
         defaultCategory={defaultCategory}
@@ -636,6 +718,14 @@ export default function WikiPage() {
         loading={deleteLoading}
         onConfirm={handleDelete}
       />
-    </div>
+    </PageShell>
+  )
+}
+
+export default function WikiPage() {
+  return (
+    <Suspense fallback={<div className="h-32 animate-page-in" />}>
+      <WikiPageInner />
+    </Suspense>
   )
 }

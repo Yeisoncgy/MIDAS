@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
@@ -70,7 +71,7 @@ export function ClientFormDialog({
 
   // Credito
   const [creditEnabled, setCreditEnabled] = useState(false)
-  const [creditLimit, setCreditLimit] = useState(0)
+  const [creditLimit, setCreditLimit] = useState<number | null>(null)
 
   // Otros
   const [notes, setNotes] = useState("")
@@ -94,7 +95,7 @@ export function ClientFormDialog({
         setSourceChannel(client.source_channel || "none")
         setSourceDetail(client.source_detail || "")
         setCreditEnabled(client.credit_enabled)
-        setCreditLimit(client.credit_limit)
+        setCreditLimit(client.credit_limit || null)
         setNotes(client.notes || "")
         setIsActive(client.is_active)
       } else {
@@ -112,7 +113,7 @@ export function ClientFormDialog({
         setSourceChannel("none")
         setSourceDetail("")
         setCreditEnabled(false)
-        setCreditLimit(0)
+        setCreditLimit(null)
         setNotes("")
         setIsActive(true)
       }
@@ -151,7 +152,7 @@ export function ClientFormDialog({
         source_channel: sourceChannel === "none" ? null : sourceChannel,
         source_detail: sourceDetail.trim() || null,
         credit_enabled: creditEnabled,
-        credit_limit: creditEnabled ? creditLimit : 0,
+        credit_limit: creditEnabled ? creditLimit ?? 0 : 0,
         notes: notes.trim() || null,
         is_active: isActive,
       }
@@ -358,11 +359,9 @@ export function ClientFormDialog({
             {creditEnabled && (
               <div>
                 <Label className="text-xs text-muted-foreground mb-1">Limite de credito</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  value={creditLimit || ""}
-                  onChange={(e) => setCreditLimit(parseInt(e.target.value) || 0)}
+                <MoneyInput
+                  value={creditLimit}
+                  onValueChange={setCreditLimit}
                   placeholder="0"
                   disabled={loading}
                 />

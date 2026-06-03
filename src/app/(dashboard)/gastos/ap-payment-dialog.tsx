@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -80,7 +81,7 @@ export function APPaymentDialog({
 
   // Formulario nuevo abono
   const [showNewPayment, setShowNewPayment] = useState(false)
-  const [paymentAmount, setPaymentAmount] = useState(0)
+  const [paymentAmount, setPaymentAmount] = useState<number | null>(null)
   const [paymentMethod, setPaymentMethod] = useState("efectivo")
   const [paymentNotes, setPaymentNotes] = useState("")
 
@@ -121,19 +122,21 @@ export function APPaymentDialog({
       setCurrentAccount(account)
       fetchData()
       setShowNewPayment(false)
-      setPaymentAmount(0)
+      setPaymentAmount(null)
       setPaymentNotes("")
     }
   }, [open, account, fetchData])
 
   // Registrar abono
   const handleRegisterPayment = useCallback(async () => {
-    if (!currentAccount || !user || paymentAmount <= 0) {
+    if (!currentAccount || !user || paymentAmount === null || paymentAmount <= 0) {
       toast.error("Ingresa un monto válido")
       return
     }
 
-    if (paymentAmount > currentAccount.remaining_amount) {
+    const abono = paymentAmount
+
+    if (abono > currentAccount.remaining_amount) {
       toast.error(`El monto máximo es ${formatCOP(currentAccount.remaining_amount)}`)
       return
     }
@@ -148,7 +151,7 @@ export function APPaymentDialog({
       const { error: payError } = await supabase.from("payment_records").insert({
         type: "payable",
         reference_id: currentAccount.id,
-        amount: paymentAmount,
+        amount: abono,
         payment_method: paymentMethod,
         payment_account_id: accountId,
         payment_date: new Date().toISOString(),
@@ -163,7 +166,7 @@ export function APPaymentDialog({
         await registerCashMovement(supabase, {
           accountId,
           type: "out",
-          amount: paymentAmount,
+          amount: abono,
           concept: `Pago CxP ${currentAccount.supplier?.name || "Proveedor"}`,
           referenceType: "payment_record",
           referenceId: currentAccount.id,
@@ -172,7 +175,7 @@ export function APPaymentDialog({
       }
 
       // 2. Actualizar cuenta por pagar
-      const newPaid = currentAccount.paid_amount + paymentAmount
+      const newPaid = currentAccount.paid_amount + abono
       const newRemaining = currentAccount.total_amount - newPaid
       const newStatus = newRemaining <= 0 ? "paid" : "partial"
 
@@ -192,11 +195,11 @@ export function APPaymentDialog({
           description: `${currentAccount.supplier?.name} — ${formatCOP(currentAccount.total_amount)}`,
         })
       } else {
-        toast.success(`Abono de ${formatCOP(paymentAmount)} registrado`)
+        toast.success(`Abono de ${formatCOP(abono)} registrado`)
       }
 
       // Reset form
-      setPaymentAmount(0)
+      setPaymentAmount(null)
       setPaymentNotes("")
       setShowNewPayment(false)
 
@@ -358,17 +361,18 @@ export function APPaymentDialog({
                     </h4>
 
                     <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <Label className="text-xs text-muted-foreground mb-1">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">
                           Monto (máx. {formatCOP(displayAccount.remaining_amount)})
                         </Label>
-                        <Input
-                          type="number"
-                          min={1}
+                        <MoneyInput
+                          value={paymentAmount}
+                          onValueChange={setPaymentAmount}
                           max={displayAccount.remaining_amount}
-                          value={paymentAmount || ""}
-                          onChange={(e) => setPaymentAmount(parseInt(e.target.value) || 0)}
+                          showMaxButton
+                          maxButtonLabel="Saldar todo"
                           placeholder="0"
+                          disabled={submitting}
                         />
                       </div>
                       <div>
@@ -400,7 +404,7 @@ export function APPaymentDialog({
                     <div className="flex gap-2">
                       <Button
                         onClick={handleRegisterPayment}
-                        disabled={submitting || paymentAmount <= 0}
+                        disabled={submitting || !paymentAmount || paymentAmount <= 0}
                         className="flex-1"
                       >
                         {submitting && <Loader2 size={16} className="mr-1.5 animate-spin" />}
@@ -410,9 +414,10 @@ export function APPaymentDialog({
                         variant="ghost"
                         onClick={() => {
                           setShowNewPayment(false)
-                          setPaymentAmount(0)
+                          setPaymentAmount(null)
                           setPaymentNotes("")
                         }}
+                        disabled={submitting}
                       >
                         Cancelar
                       </Button>

@@ -1,20 +1,26 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   Plus,
-  Search,
-  UserCircle,
   Pencil,
-  Loader2,
+  UserCircle,
+  MessageCircle,
+  Copy,
+  Phone,
 } from "lucide-react"
+import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { PageShell } from "@/components/shared/page-shell"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { PageSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -22,14 +28,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { formatCOP } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { SALE_CHANNELS } from "@/lib/constants"
 import { ClientFormDialog } from "./client-form-dialog"
 import type { Client } from "@/lib/types"
@@ -39,13 +39,28 @@ for (const ch of SALE_CHANNELS) {
   CHANNEL_LABELS[ch.value] = ch.label
 }
 
-export default function ClientesPage() {
+/**
+ * Normaliza un teléfono colombiano para WhatsApp:
+ * quita todo lo que no sea dígito y antepone 57 si no lo tiene.
+ */
+function toWhatsappNumber(raw: string): string {
+  const digits = (raw || "").replace(/\D/g, "")
+  if (!digits) return ""
+  // Quitar 0 inicial (marcación nacional) si existe
+  const clean = digits.replace(/^0+/, "")
+  return clean.startsWith("57") ? clean : `57${clean}`
+}
+
+function ClientesPageInner() {
   const supabase = createClient()
+  const params = useSearchParams()
 
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const debouncedSearch = useDebounce(search, 250)
   const [statusFilter, setStatusFilter] = useState("all")
+  const [creditFilter, setCreditFilter] = useState("all")
   const [showForm, setShowForm] = useState(false)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
 
@@ -64,23 +79,38 @@ export default function ClientesPage() {
     fetchClients()
   }, [fetchClients])
 
-  // Stats
-  const activeClients = clients.filter((c) => c.is_active)
-  const inactiveClients = clients.filter((c) => !c.is_active)
-  const withCredit = clients.filter((c) => c.is_active && c.credit_enabled)
+  // Intent de creación (?nuevo=1) desde el command palette
+  useEffect(() => {
+    if (params.get("nuevo") === "1") {
+      setSelectedClient(null)
+      setShowForm(true)
+    }
+  }, [params])
 
-  // Nuevos este mes
-  const newThisMonth = useMemo(() => {
+  // === Stats ===
+  const stats = useMemo(() => {
+    const activeClients = clients.filter((c) => c.is_active)
+    const inactiveClients = clients.filter((c) => !c.is_active)
+    const withCredit = clients.filter((c) => c.is_active && c.credit_enabled)
+
     const now = new Date()
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-    return clients.filter((c) => c.created_at >= monthStart).length
+    const newThisMonth = clients.filter((c) => c.created_at >= monthStart).length
+
+    return {
+      active: activeClients.length,
+      inactive: inactiveClients.length,
+      withCredit: withCredit.length,
+      newThisMonth,
+    }
   }, [clients])
 
-  // Filtrado
+  // === Filtrado ===
   const filtered = useMemo(() => {
     return clients.filter((c) => {
-      const q = search.toLowerCase()
+      const q = debouncedSearch.toLowerCase()
       const matchesSearch =
+        !q ||
         c.full_name.toLowerCase().includes(q) ||
         c.phone_whatsapp.toLowerCase().includes(q) ||
         (c.email || "").toLowerCase().includes(q) ||
@@ -91,9 +121,23 @@ export default function ClientesPage() {
         (statusFilter === "active" && c.is_active) ||
         (statusFilter === "inactive" && !c.is_active)
 
-      return matchesSearch && matchesStatus
+      const matchesCredit =
+        creditFilter === "all" ||
+        (creditFilter === "with" && c.credit_enabled) ||
+        (creditFilter === "without" && !c.credit_enabled)
+
+      return matchesSearch && matchesStatus && matchesCredit
     })
-  }, [clients, search, statusFilter])
+  }, [clients, debouncedSearch, statusFilter, creditFilter])
+
+  const hasActiveFilters =
+    !!search || statusFilter !== "all" || creditFilter !== "all"
+
+  const clearFilters = () => {
+    setSearch("")
+    setStatusFilter("all")
+    setCreditFilter("all")
+  }
 
   const openCreate = () => {
     setSelectedClient(null)
@@ -105,36 +149,203 @@ export default function ClientesPage() {
     setShowForm(true)
   }
 
+  const handleCopyPhone = useCallback(async (phone: string) => {
+    try {
+      await navigator.clipboard.writeText(phone)
+      toast.success("Teléfono copiado", { description: phone })
+    } catch {
+      toast.error("No se pudo copiar el teléfono")
+    }
+  }, [])
+
+  const totalCreditLimit = useMemo(
+    () =>
+      filtered
+        .filter((c) => c.credit_enabled)
+        .reduce((sum, c) => sum + (c.credit_limit || 0), 0),
+    [filtered]
+  )
+
+  // === Columnas ===
+  const columns = useMemo<Column<Client>[]>(
+    () => [
+      {
+        key: "name",
+        header: "Nombre",
+        sortAccessor: (c) => c.full_name,
+        cell: (c) => (
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-foreground">
+              {c.full_name}
+            </p>
+            <p className="flex items-center gap-1 text-xs text-muted-foreground sm:hidden">
+              <Phone size={11} />
+              {c.phone_whatsapp}
+            </p>
+          </div>
+        ),
+      },
+      {
+        key: "phone",
+        header: "Teléfono",
+        className: "hidden sm:table-cell",
+        sortAccessor: (c) => c.phone_whatsapp,
+        cell: (c) => (
+          <span className="tabular-nums text-foreground">{c.phone_whatsapp}</span>
+        ),
+      },
+      {
+        key: "city",
+        header: "Ciudad",
+        className: "hidden md:table-cell text-muted-foreground",
+        sortAccessor: (c) => c.city ?? "",
+        cell: (c) => c.city || "—",
+      },
+      {
+        key: "channel",
+        header: "Canal origen",
+        className: "hidden lg:table-cell text-muted-foreground",
+        cell: (c) =>
+          c.source_channel
+            ? CHANNEL_LABELS[c.source_channel] || c.source_channel
+            : "—",
+      },
+      {
+        key: "credit",
+        header: "Crédito",
+        align: "center",
+        className: "hidden md:table-cell",
+        sortAccessor: (c) => (c.credit_enabled ? c.credit_limit || 1 : 0),
+        cell: (c) =>
+          c.credit_enabled ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center rounded-full border border-info/20 bg-info/10 px-2 py-0.5 text-xs font-medium text-info">
+                  {c.credit_limit > 0 ? formatCOP(c.credit_limit) : "Sí"}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Crédito habilitado</TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="text-xs text-muted-foreground">—</span>
+          ),
+        footer: totalCreditLimit > 0 ? formatCOP(totalCreditLimit) : undefined,
+      },
+      {
+        key: "status",
+        header: "Estado",
+        align: "center",
+        cell: (c) => <StatusBadge status={c.is_active ? "active" : "inactive"} />,
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (c) => {
+          const wa = toWhatsappNumber(c.phone_whatsapp)
+          return (
+            <div
+              className="flex items-center justify-end gap-0.5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {wa && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon-xs"
+                      className="text-success hover:text-success"
+                    >
+                      <a
+                        href={`https://wa.me/${wa}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label="Escribir por WhatsApp"
+                      >
+                        <MessageCircle size={15} />
+                      </a>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Escribir por WhatsApp</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => handleCopyPhone(c.phone_whatsapp)}
+                  >
+                    <Copy size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copiar teléfono</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => openEdit(c)}
+                  >
+                    <Pencil size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Editar cliente</TooltipContent>
+              </Tooltip>
+            </div>
+          )
+        },
+      },
+    ],
+    [handleCopyPhone, totalCreditLimit]
+  )
+
+  if (loading) {
+    return <PageSkeleton stats={4} rows={8} cols={6} />
+  }
+
   return (
-    <div>
-      <PageHeader title="Clientes" description="Base de datos de clientes (CRM)">
+    <PageShell
+      title="Clientes"
+      description="Base de datos de clientes (CRM)"
+      actions={
         <Button onClick={openCreate}>
           <Plus size={16} className="mr-1.5" />
           Nuevo cliente
         </Button>
-      </PageHeader>
-
-      {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      }
+    >
+      {/* Stat Cards — clicables para filtrar */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Clientes activos"
-          value={activeClients.length}
+          value={stats.active}
           icon="Users"
           format="number"
           borderColor="gold"
           delay={0}
+          active={statusFilter === "active"}
+          onClick={() =>
+            setStatusFilter((s) => (s === "active" ? "all" : "active"))
+          }
         />
         <StatCard
-          label="Con credito"
-          value={withCredit.length}
+          label="Con crédito"
+          value={stats.withCredit}
           icon="DollarSign"
           format="number"
           borderColor="info"
           delay={1}
+          active={creditFilter === "with"}
+          onClick={() =>
+            setCreditFilter((c) => (c === "with" ? "all" : "with"))
+          }
         />
         <StatCard
           label="Nuevos este mes"
-          value={newThisMonth}
+          value={stats.newThisMonth}
           icon="TrendingUp"
           format="number"
           borderColor="success"
@@ -142,135 +353,95 @@ export default function ClientesPage() {
         />
         <StatCard
           label="Inactivos"
-          value={inactiveClients.length}
+          value={stats.inactive}
           icon="Users"
           format="number"
           borderColor="warning"
           delay={3}
+          active={statusFilter === "inactive"}
+          onClick={() =>
+            setStatusFilter((s) => (s === "inactive" ? "all" : "inactive"))
+          }
         />
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-4">
-        <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre, telefono, email o cedula..."
-            className="pl-9"
+      <FilterBar
+        search={
+          <SearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onValueChange={setSearch}
+            placeholder="Buscar por nombre, teléfono, email o cédula..."
+            wrapperClassName="max-w-sm"
           />
-        </div>
+        }
+        hasActiveFilters={hasActiveFilters}
+        onClear={clearFilters}
+      >
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-full sm:w-[150px]">
+          <SelectTrigger className="w-40">
             <SelectValue placeholder="Estado" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos</SelectItem>
+            <SelectItem value="all">Todos los estados</SelectItem>
             <SelectItem value="active">Activos</SelectItem>
             <SelectItem value="inactive">Inactivos</SelectItem>
           </SelectContent>
         </Select>
-      </div>
+        <Select value={creditFilter} onValueChange={setCreditFilter}>
+          <SelectTrigger className="w-40">
+            <SelectValue placeholder="Crédito" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Crédito (todos)</SelectItem>
+            <SelectItem value="with">Con crédito</SelectItem>
+            <SelectItem value="without">Sin crédito</SelectItem>
+          </SelectContent>
+        </Select>
+      </FilterBar>
 
       {/* Tabla */}
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 size={24} className="animate-spin text-gold" />
-        </div>
-      ) : filtered.length === 0 ? (
-        <EmptyState
-          icon={UserCircle}
-          title="Sin clientes"
-          description={
-            clients.length === 0
-              ? "Registra tu primer cliente."
-              : "No se encontraron clientes con los filtros aplicados."
-          }
-        >
-          {clients.length === 0 && (
-            <Button className="mt-2" onClick={openCreate}>
+      <DataTable
+        data={filtered}
+        columns={columns}
+        rowKey={(c) => c.id}
+        onRowClick={openEdit}
+        isFiltered={hasActiveFilters}
+        pageSize={25}
+        showFooter
+        empty={{
+          icon: UserCircle,
+          title: hasActiveFilters ? "Sin resultados" : "Sin clientes",
+          description: hasActiveFilters
+            ? "No se encontraron clientes con los filtros aplicados. Prueba ajustarlos."
+            : "Registra tu primer cliente para empezar a construir tu CRM.",
+          action: (
+            <Button onClick={openCreate}>
               <Plus size={16} className="mr-1.5" />
               Nuevo cliente
             </Button>
-          )}
-        </EmptyState>
-      ) : (
-        <div className="bg-card rounded-lg border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-cream hover:bg-cream">
-                  <TableHead className="text-xs font-semibold text-muted-foreground">Nombre</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground hidden sm:table-cell">Telefono</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground hidden md:table-cell">Ciudad</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground hidden lg:table-cell">Canal origen</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground hidden md:table-cell text-center">Credito</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground">Estado</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground text-right">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((c) => (
-                  <TableRow
-                    key={c.id}
-                    className="hover:bg-cream-dark/50 transition-colors cursor-pointer"
-                    onClick={() => openEdit(c)}
-                  >
-                    <TableCell>
-                      <p className="text-sm font-medium">{c.full_name}</p>
-                      <p className="text-xs text-muted-foreground sm:hidden">
-                        {c.phone_whatsapp}
-                      </p>
-                    </TableCell>
-                    <TableCell className="text-sm hidden sm:table-cell">
-                      {c.phone_whatsapp}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground hidden md:table-cell">
-                      {c.city || "—"}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground hidden lg:table-cell">
-                      {c.source_channel ? (CHANNEL_LABELS[c.source_channel] || c.source_channel) : "—"}
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell text-center">
-                      {c.credit_enabled ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-info/10 text-info border border-info/20">
-                          Si
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={c.is_active ? "active" : "inactive"} />
-                    </TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(c)}>
-                        <Pencil size={14} className="mr-1" />
-                        Editar
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Footer */}
-          <div className="px-4 py-3 border-t border-border bg-cream text-xs text-muted-foreground">
-            {filtered.length} cliente{filtered.length !== 1 ? "s" : ""}
-            {statusFilter !== "all" && ` (${statusFilter === "active" ? "activos" : "inactivos"})`}
-          </div>
-        </div>
-      )}
+          ),
+        }}
+      />
 
       {/* Dialog */}
       <ClientFormDialog
         open={showForm}
-        onOpenChange={setShowForm}
+        onOpenChange={(isOpen) => {
+          setShowForm(isOpen)
+          if (!isOpen) setSelectedClient(null)
+        }}
         client={selectedClient}
         onCompleted={fetchClients}
       />
-    </div>
+    </PageShell>
+  )
+}
+
+export default function ClientesPage() {
+  return (
+    <Suspense fallback={<PageSkeleton stats={4} rows={8} cols={6} />}>
+      <ClientesPageInner />
+    </Suspense>
   )
 }

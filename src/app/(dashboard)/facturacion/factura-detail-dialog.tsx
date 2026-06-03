@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { StatusBadge } from "@/components/shared/status-badge"
 import { formatCOP, formatDateTime } from "@/lib/format"
 import { PAYMENT_METHODS, SALE_CHANNELS } from "@/lib/constants"
@@ -490,52 +491,64 @@ export function FacturaDetailDialog({ open, onOpenChange, sale }: FacturaDetailD
 
         {/* Footer con acciones */}
         <DialogFooter className="p-4 border-t border-white/30 bg-white/40 flex-row flex-wrap gap-2 justify-center sm:justify-start relative z-10 shrink-0">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handlePrint}
-            title="Imprimir recibo"
-            className="flex-1 sm:flex-none bg-white/60 hover:bg-white backdrop-blur-md border-white/80 shadow-sm font-semibold"
-          >
-            <Printer size={16} className="mr-2 text-gold" />
-            Recibo
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDownloadPDF}
-            disabled={downloadingPDF}
-            title="Descargar PDF"
-            className="flex-1 sm:flex-none bg-white/60 hover:bg-white backdrop-blur-md border-white/80 shadow-sm font-semibold"
-          >
-            {downloadingPDF ? (
-              <Loader2 size={16} className="mr-2 animate-spin" />
-            ) : (
-              <FileText size={16} className="mr-2 text-info" />
-            )}
-            PDF
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (sale.client?.email) {
-                handleSendEmail()
-              } else {
-                setShowEmailInput(true)
-              }
-            }}
-            disabled={sendingEmail}
-            title="Enviar por email"
-            className="flex-1 sm:flex-none bg-white/60 hover:bg-white backdrop-blur-md border-white/80 shadow-sm font-semibold"
-          >
-            {sendingEmail ? (
-              <Loader2 size={16} className="mr-2 animate-spin" />
-            ) : (
-              <Mail size={16} className="mr-2 text-warning" />
-            )}
-            Email
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePrint}
+                className="flex-1 sm:flex-none bg-white/60 hover:bg-white backdrop-blur-md border-white/80 shadow-sm font-semibold"
+              >
+                <Printer size={16} className="mr-2 text-gold" />
+                Recibo
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Imprimir recibo térmico</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownloadPDF}
+                disabled={downloadingPDF}
+                className="flex-1 sm:flex-none bg-white/60 hover:bg-white backdrop-blur-md border-white/80 shadow-sm font-semibold"
+              >
+                {downloadingPDF ? (
+                  <Loader2 size={16} className="mr-2 animate-spin" />
+                ) : (
+                  <FileText size={16} className="mr-2 text-info" />
+                )}
+                PDF
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Descargar PDF</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (sale.client?.email) {
+                    handleSendEmail()
+                  } else {
+                    setShowEmailInput(true)
+                  }
+                }}
+                disabled={sendingEmail}
+                className="flex-1 sm:flex-none bg-white/60 hover:bg-white backdrop-blur-md border-white/80 shadow-sm font-semibold"
+              >
+                {sendingEmail ? (
+                  <Loader2 size={16} className="mr-2 animate-spin" />
+                ) : (
+                  <Mail size={16} className="mr-2 text-warning" />
+                )}
+                Email
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Enviar por email</TooltipContent>
+          </Tooltip>
         </DialogFooter>
       </DialogContent>
     </Dialog>

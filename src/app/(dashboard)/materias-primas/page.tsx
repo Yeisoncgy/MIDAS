@@ -1,25 +1,25 @@
 "use client"
 
-import { useEffect, useState, useCallback, useMemo } from "react"
+import { useEffect, useState, useCallback, useMemo, Suspense } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   Layers,
   Plus,
-  Search,
   Pencil,
   PlusCircle,
   SlidersHorizontal,
   History,
-  MoreHorizontal,
   Download,
 } from "lucide-react"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
+import { PageShell } from "@/components/shared/page-shell"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { PageSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -27,28 +27,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { formatCOP, formatNumber, formatRelativeTime } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { RAW_MATERIAL_CATEGORIES } from "@/lib/constants"
 import type { RawMaterial } from "@/lib/types"
 import { MaterialFormDialog } from "./material-form-dialog"
@@ -57,11 +39,14 @@ import { AdjustStockDialog } from "./adjust-stock-dialog"
 import { MovementsDialog } from "./movements-dialog"
 import { exportMaterialsToExcel } from "./export-materials"
 
-export default function MateriasPrimasPage() {
+function MateriasPrimasPageInner() {
+  const params = useSearchParams()
+
   // --- Estado del componente ---
   const [materials, setMaterials] = useState<RawMaterial[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const debouncedSearch = useDebounce(search, 250)
   const [categoryFilter, setCategoryFilter] = useState("all")
   const [stockFilter, setStockFilter] = useState("all")
 
@@ -110,6 +95,14 @@ export default function MateriasPrimasPage() {
     fetchLastMovement()
   }, [fetchMaterials, fetchLastMovement])
 
+  // --- Intent de creación desde el command palette (?nuevo=1) ---
+  useEffect(() => {
+    if (params.get("nuevo") === "1") {
+      setSelectedMaterial(null)
+      setShowForm(true)
+    }
+  }, [params])
+
   // --- Cálculos de estadísticas (memoizados) ---
   const { totalMaterials, lowStock, totalValue, outOfStock } = useMemo(() => ({
     totalMaterials: materials.length,
@@ -120,9 +113,11 @@ export default function MateriasPrimasPage() {
 
   // --- Filtros (memoizados) ---
   const filteredMaterials = useMemo(() => materials.filter((m) => {
+    const q = debouncedSearch.toLowerCase()
     const matchesSearch =
-      m.name.toLowerCase().includes(search.toLowerCase()) ||
-      m.category.toLowerCase().includes(search.toLowerCase())
+      !q ||
+      m.name.toLowerCase().includes(q) ||
+      m.category.toLowerCase().includes(q)
 
     const matchesCategory =
       categoryFilter === "all" || m.category === categoryFilter
@@ -134,7 +129,16 @@ export default function MateriasPrimasPage() {
       (stockFilter === "out" && m.stock === 0)
 
     return matchesSearch && matchesCategory && matchesStock
-  }), [materials, search, categoryFilter, stockFilter])
+  }), [materials, debouncedSearch, categoryFilter, stockFilter])
+
+  // --- Totales del listado filtrado (para footers) ---
+  const filteredTotals = useMemo(
+    () => ({
+      units: filteredMaterials.reduce((s, m) => s + m.stock, 0),
+      value: filteredMaterials.reduce((s, m) => s + m.stock * m.cost_per_unit, 0),
+    }),
+    [filteredMaterials]
+  )
 
   // --- Nivel de stock visual ---
   const getStockLevel = (stock: number, minAlert: number) => {
@@ -152,6 +156,16 @@ export default function MateriasPrimasPage() {
   const getCategoryLabel = (value: string) => {
     const cat = RAW_MATERIAL_CATEGORIES.find((c) => c.value === value)
     return cat ? cat.label : value
+  }
+
+  // --- Filtros activos / limpiar ---
+  const hasActiveFilters =
+    !!search || categoryFilter !== "all" || stockFilter !== "all"
+
+  const clearFilters = () => {
+    setSearch("")
+    setCategoryFilter("all")
+    setStockFilter("all")
   }
 
   // --- Acciones de diálogos ---
@@ -185,50 +199,197 @@ export default function MateriasPrimasPage() {
     fetchLastMovement()
   }
 
+  // --- Columnas de la tabla ---
+  const columns = useMemo<Column<RawMaterial>[]>(
+    () => [
+      {
+        key: "material",
+        header: "Material",
+        sortAccessor: (m) => m.name,
+        cell: (m) => (
+          <div>
+            <p className="font-medium text-foreground">{m.name}</p>
+            {m.supplier && (
+              <p className="text-xs text-muted-foreground">
+                {(m.supplier as unknown as { name: string }).name}
+              </p>
+            )}
+          </div>
+        ),
+        footer: (
+          <span className="text-muted-foreground">
+            {filteredMaterials.length} material{filteredMaterials.length !== 1 ? "es" : ""}
+          </span>
+        ),
+      },
+      {
+        key: "category",
+        header: "Categoría",
+        className: "text-muted-foreground",
+        sortAccessor: (m) => getCategoryLabel(m.category),
+        cell: (m) => getCategoryLabel(m.category),
+      },
+      {
+        key: "stock",
+        header: "Stock actual",
+        sortAccessor: (m) => m.stock,
+        cell: (m) => {
+          const stockLevel = getStockLevel(m.stock, m.min_stock_alert)
+          return (
+            <div className="flex items-center gap-3 min-w-[120px]">
+              <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className={cn("h-full rounded-full transition-all", stockLevel.color)}
+                  style={{ width: `${stockLevel.percent}%` }}
+                />
+              </div>
+              <span
+                className={cn(
+                  "text-sm font-semibold tabular-nums min-w-[24px] text-right",
+                  m.stock === 0 && "text-error",
+                  m.stock > 0 && m.stock <= m.min_stock_alert && "text-warning"
+                )}
+              >
+                {m.stock}
+              </span>
+            </div>
+          )
+        },
+        footer: (
+          <span className="text-foreground">
+            {formatNumber(filteredTotals.units)} und.
+          </span>
+        ),
+      },
+      {
+        key: "unit",
+        header: "Unidad",
+        className: "text-muted-foreground",
+        cell: (m) => m.unit,
+      },
+      {
+        key: "min_stock",
+        header: "Stock mínimo",
+        align: "right",
+        className: "hidden md:table-cell text-muted-foreground",
+        sortAccessor: (m) => m.min_stock_alert,
+        cell: (m) => m.min_stock_alert,
+      },
+      {
+        key: "cost",
+        header: "Costo unitario",
+        align: "right",
+        className: "hidden md:table-cell text-muted-foreground",
+        sortAccessor: (m) => m.cost_per_unit,
+        cell: (m) => formatCOP(m.cost_per_unit),
+      },
+      {
+        key: "value",
+        header: "Valor total",
+        align: "right",
+        className: "hidden lg:table-cell",
+        sortAccessor: (m) => m.stock * m.cost_per_unit,
+        cell: (m) => (
+          <span className="font-semibold text-gold">
+            {formatCOP(m.stock * m.cost_per_unit)}
+          </span>
+        ),
+        footer: (
+          <span className="text-gold">{formatCOP(filteredTotals.value)}</span>
+        ),
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (m) => (
+          <div
+            className="flex items-center justify-end gap-0.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => openEdit(m)}>
+                  <Pencil size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Editar</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-success hover:text-success"
+                  onClick={() => openAddStock(m)}
+                >
+                  <PlusCircle size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Agregar stock</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-warning hover:text-warning"
+                  onClick={() => openAdjust(m)}
+                >
+                  <SlidersHorizontal size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Ajustar stock</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => openMovements(m)}>
+                  <History size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Movimientos</TooltipContent>
+            </Tooltip>
+          </div>
+        ),
+      },
+    ],
+    [filteredMaterials.length, filteredTotals]
+  )
+
   // --- Estado de carga ---
   if (loading) {
-    return (
-      <div className="space-y-6">
-        <Skeleton className="h-10 w-48 skeleton-shimmer" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-[100px] rounded-xl skeleton-shimmer" />
-          ))}
-        </div>
-        <Skeleton className="h-96 rounded-xl skeleton-shimmer" />
-      </div>
-    )
+    return <PageSkeleton stats={4} rows={8} cols={6} />
   }
 
   return (
-    <div className="space-y-6">
-      {/* Encabezado de página */}
-      <PageHeader
-        title="Materias Primas"
-        description="Control de insumos y materiales de producción"
-      >
-        <Button
-          variant="outline"
-          onClick={async () => {
-            try {
-              await exportMaterialsToExcel(filteredMaterials)
-              toast.success("Reporte descargado correctamente")
-            } catch {
-              toast.error("Error al generar el reporte")
-            }
-          }}
-          disabled={filteredMaterials.length === 0}
-        >
-          <Download size={16} className="mr-1.5" />
-          Descargar reporte
-        </Button>
-        <Button onClick={openCreate}>
-          <Plus size={18} className="mr-1.5" />
-          Agregar material
-        </Button>
-      </PageHeader>
-
-      {/* Cards de resumen */}
+    <PageShell
+      title="Materias Primas"
+      description="Control de insumos y materiales de producción"
+      actions={
+        <>
+          <Button
+            variant="outline"
+            onClick={async () => {
+              try {
+                await exportMaterialsToExcel(filteredMaterials)
+                toast.success("Reporte descargado correctamente")
+              } catch {
+                toast.error("Error al generar el reporte")
+              }
+            }}
+            disabled={filteredMaterials.length === 0}
+          >
+            <Download size={16} className="mr-1.5" />
+            Descargar reporte
+          </Button>
+          <Button onClick={openCreate}>
+            <Plus size={18} className="mr-1.5" />
+            Agregar material
+          </Button>
+        </>
+      }
+    >
+      {/* Cards de resumen — clicables para filtrar por estado de stock */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Total materiales"
@@ -245,6 +406,9 @@ export default function MateriasPrimasPage() {
           format="number"
           borderColor="warning"
           delay={1}
+          active={stockFilter === "low"}
+          onClick={() => setStockFilter((s) => (s === "low" ? "all" : "low"))}
+          hint="Toca para filtrar"
         />
         <StatCard
           label="Valor en inventario"
@@ -261,30 +425,32 @@ export default function MateriasPrimasPage() {
           format="number"
           borderColor="error"
           delay={3}
+          active={stockFilter === "out"}
+          onClick={() => setStockFilter((s) => (s === "out" ? "all" : "out"))}
+          hint="Toca para filtrar"
         />
       </div>
 
       {/* Info último movimiento */}
       {lastMovementDate && (
-        <p className="text-xs text-muted-foreground">
+        <p className="-mt-2 text-xs text-muted-foreground">
           Último movimiento: {formatRelativeTime(lastMovementDate)}
         </p>
       )}
 
       {/* Filtros */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search
-            size={16}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            placeholder="Buscar por nombre o categoría..."
+      <FilterBar
+        search={
+          <SearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
+            onValueChange={setSearch}
+            placeholder="Buscar por nombre o categoría..."
+            wrapperClassName="max-w-sm"
           />
-        </div>
+        }
+        hasActiveFilters={hasActiveFilters}
+        onClear={clearFilters}
+      >
         <Select value={categoryFilter} onValueChange={setCategoryFilter}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder="Categoría" />
@@ -309,249 +475,30 @@ export default function MateriasPrimasPage() {
             <SelectItem value="out">Agotado</SelectItem>
           </SelectContent>
         </Select>
-      </div>
+      </FilterBar>
 
       {/* Tabla de materias primas */}
-      {filteredMaterials.length === 0 ? (
-        <EmptyState
-          icon={Layers}
-          title="Sin materiales"
-          description={
-            materials.length === 0
-              ? "Agrega materiales para empezar a gestionar tus insumos de producción"
-              : "No se encontraron materiales con los filtros aplicados."
-          }
-        >
-          {materials.length === 0 && (
-            <Button className="mt-2" onClick={openCreate}>
+      <DataTable
+        data={filteredMaterials}
+        columns={columns}
+        rowKey={(m) => m.id}
+        onRowClick={openMovements}
+        isFiltered={hasActiveFilters}
+        pageSize={25}
+        showFooter
+        empty={{
+          icon: Layers,
+          title: "Sin materiales",
+          description:
+            "Agrega materiales para empezar a gestionar tus insumos de producción.",
+          action: (
+            <Button onClick={openCreate}>
               <Plus size={18} className="mr-1.5" />
               Agregar material
             </Button>
-          )}
-        </EmptyState>
-      ) : (
-        <div className="bg-card rounded-xl border border-border overflow-hidden shadow-card">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-cream hover:bg-cream">
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                    Material
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                    Categoría
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                    Stock actual
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                    Unidad
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground hidden md:table-cell">
-                    Stock mínimo
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground hidden md:table-cell">
-                    Costo unitario
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground hidden lg:table-cell">
-                    Valor total
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right">
-                    Acciones
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredMaterials.map((m) => {
-                  const stockLevel = getStockLevel(m.stock, m.min_stock_alert)
-                  return (
-                    <TableRow
-                      key={m.id}
-                      className="hover:bg-cream-dark/50 transition-colors cursor-pointer"
-                      onClick={() => openMovements(m)}
-                    >
-                      {/* Nombre del material */}
-                      <TableCell className="font-medium text-sm">
-                        <div>
-                          {m.name}
-                          {m.supplier && (
-                            <p className="text-xs text-muted-foreground">
-                              {(m.supplier as unknown as { name: string }).name}
-                            </p>
-                          )}
-                        </div>
-                      </TableCell>
-
-                      {/* Categoría */}
-                      <TableCell className="text-sm text-muted-foreground">
-                        {getCategoryLabel(m.category)}
-                      </TableCell>
-
-                      {/* Stock actual con barra visual */}
-                      <TableCell>
-                        <div className="flex items-center gap-3 min-w-[120px]">
-                          <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className={cn(
-                                "h-full rounded-full transition-all",
-                                stockLevel.color
-                              )}
-                              style={{ width: `${stockLevel.percent}%` }}
-                            />
-                          </div>
-                          <span
-                            className={cn(
-                              "text-sm font-semibold tabular-nums min-w-[24px] text-right",
-                              m.stock === 0 && "text-error",
-                              m.stock > 0 &&
-                                m.stock <= m.min_stock_alert &&
-                                "text-warning"
-                            )}
-                          >
-                            {m.stock}
-                          </span>
-                        </div>
-                      </TableCell>
-
-                      {/* Unidad de medida */}
-                      <TableCell className="text-sm text-muted-foreground">
-                        {m.unit}
-                      </TableCell>
-
-                      {/* Stock mínimo de alerta */}
-                      <TableCell className="text-sm text-muted-foreground tabular-nums hidden md:table-cell">
-                        {m.min_stock_alert}
-                      </TableCell>
-
-                      {/* Costo unitario */}
-                      <TableCell className="text-sm text-muted-foreground tabular-nums hidden md:table-cell">
-                        {formatCOP(m.cost_per_unit)}
-                      </TableCell>
-
-                      {/* Valor total (stock * costo) */}
-                      <TableCell className="text-sm font-semibold text-gold tabular-nums hidden lg:table-cell">
-                        {formatCOP(m.stock * m.cost_per_unit)}
-                      </TableCell>
-
-                      {/* Acciones */}
-                      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                        <TooltipProvider delayDuration={300}>
-                          {/* Acciones rápidas en desktop */}
-                          <div className="hidden sm:flex items-center justify-end gap-1">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="size-8"
-                                  onClick={() => openEdit(m)}
-                                >
-                                  <Pencil size={15} />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Editar</TooltipContent>
-                            </Tooltip>
-
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="size-8 text-success hover:text-success"
-                                  onClick={() => openAddStock(m)}
-                                >
-                                  <PlusCircle size={15} />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Agregar stock</TooltipContent>
-                            </Tooltip>
-
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="size-8 text-warning hover:text-warning"
-                                  onClick={() => openAdjust(m)}
-                                >
-                                  <SlidersHorizontal size={15} />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Ajustar stock</TooltipContent>
-                            </Tooltip>
-
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="size-8"
-                                  onClick={() => openMovements(m)}
-                                >
-                                  <History size={15} />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Movimientos</TooltipContent>
-                            </Tooltip>
-                          </div>
-
-                          {/* Dropdown en móvil */}
-                          <div className="sm:hidden">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="size-8">
-                                  <MoreHorizontal size={16} />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => openEdit(m)}>
-                                  <Pencil size={14} className="mr-2" />
-                                  Editar
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => openAddStock(m)}>
-                                  <PlusCircle size={14} className="mr-2" />
-                                  Agregar stock
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => openAdjust(m)}>
-                                  <SlidersHorizontal size={14} className="mr-2" />
-                                  Ajustar stock
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => openMovements(m)}>
-                                  <History size={14} className="mr-2" />
-                                  Movimientos
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </TooltipProvider>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Totales al pie */}
-          <div className="px-4 py-3 bg-cream border-t border-border flex justify-between text-sm">
-            <span className="text-muted-foreground">
-              {filteredMaterials.length} materiales ·{" "}
-              {formatNumber(
-                filteredMaterials.reduce((s, m) => s + m.stock, 0)
-              )}{" "}
-              unidades totales
-            </span>
-            <span className="font-semibold text-gold tabular-nums">
-              {formatCOP(
-                filteredMaterials.reduce(
-                  (s, m) => s + m.stock * m.cost_per_unit,
-                  0
-                )
-              )}
-            </span>
-          </div>
-        </div>
-      )}
+          ),
+        }}
+      />
 
       {/* ===== Diálogos ===== */}
       <MaterialFormDialog
@@ -577,6 +524,14 @@ export default function MateriasPrimasPage() {
         onOpenChange={setShowMovements}
         material={selectedMaterial}
       />
-    </div>
+    </PageShell>
+  )
+}
+
+export default function MateriasPrimasPage() {
+  return (
+    <Suspense fallback={<PageSkeleton stats={4} rows={8} cols={6} />}>
+      <MateriasPrimasPageInner />
+    </Suspense>
   )
 }

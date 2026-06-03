@@ -1,22 +1,24 @@
 "use client"
 
-import { useEffect, useState, useCallback, useMemo } from "react"
+import { useEffect, useState, useCallback, useMemo, Suspense } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   Receipt,
   Plus,
-  Search,
   Eye,
   Printer,
   CreditCard,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { PageShell } from "@/components/shared/page-shell"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { PageSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -24,15 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { formatCOP, formatDateShort, getTotalItems } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { SALE_STATUS_CONFIG } from "@/lib/constants"
 import type { SaleStatus } from "@/lib/types"
 import { NuevaFacturaDialog } from "./nueva-factura-dialog"
@@ -40,13 +35,16 @@ import { FacturaDetailDialog } from "./factura-detail-dialog"
 import { AbonosDialog } from "./abonos-dialog"
 import { printReceipt, type SaleExpanded } from "./recibo-termico"
 
-export default function FacturacionPage() {
+function FacturacionPageInner() {
+  const params = useSearchParams()
+
   // === Estado principal ===
   const [sales, setSales] = useState<SaleExpanded[]>([])
   const [loading, setLoading] = useState(true)
 
   // === Filtros ===
   const [search, setSearch] = useState("")
+  const debouncedSearch = useDebounce(search, 250)
   const [statusFilter, setStatusFilter] = useState("all")
 
   // === Diálogos ===
@@ -89,6 +87,11 @@ export default function FacturacionPage() {
     fetchSales()
   }, [fetchSales])
 
+  // === Intent ?nuevo=1 — abrir el form de nueva factura ===
+  useEffect(() => {
+    if (params.get("nuevo") === "1") setShowNuevaFactura(true)
+  }, [params])
+
   // === Estadísticas del mes actual ===
   const stats = useMemo(() => {
     const ahora = new Date()
@@ -112,9 +115,9 @@ export default function FacturacionPage() {
   const filteredSales = useMemo(() => {
     return sales.filter((sale) => {
       // Filtro por búsqueda (número de factura o nombre de cliente)
-      const searchLower = search.toLowerCase()
+      const searchLower = debouncedSearch.toLowerCase()
       const matchesSearch =
-        !search ||
+        !debouncedSearch ||
         sale.invoice_number?.toLowerCase().includes(searchLower) ||
         sale.client?.full_name?.toLowerCase().includes(searchLower)
 
@@ -124,7 +127,14 @@ export default function FacturacionPage() {
 
       return matchesSearch && matchesStatus
     })
-  }, [sales, search, statusFilter])
+  }, [sales, debouncedSearch, statusFilter])
+
+  const hasActiveFilters = !!search || statusFilter !== "all"
+
+  const clearFilters = () => {
+    setSearch("")
+    setStatusFilter("all")
+  }
 
   // === Calcular el descuento visible ===
   const getDiscountDisplay = (sale: SaleExpanded): string => {
@@ -153,37 +163,152 @@ export default function FacturacionPage() {
     setShowAbonos(true)
   }
 
+  // === Columnas de la tabla ===
+  const columns = useMemo<Column<SaleExpanded>[]>(
+    () => [
+      {
+        key: "invoice",
+        header: "# Factura",
+        sortAccessor: (s) => s.invoice_number ?? "",
+        cell: (sale) => (
+          <span className="flex items-center gap-1.5 font-semibold text-gold">
+            {sale.invoice_number}
+            {sale.is_credit && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <CreditCard size={13} className="text-warning" />
+                </TooltipTrigger>
+                <TooltipContent>Venta a crédito</TooltipContent>
+              </Tooltip>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "date",
+        header: "Fecha",
+        sortAccessor: (s) => s.sale_date || s.created_at,
+        cell: (sale) => (
+          <span className="text-muted-foreground">
+            {formatDateShort(sale.sale_date || sale.created_at)}
+          </span>
+        ),
+      },
+      {
+        key: "client",
+        header: "Cliente",
+        sortAccessor: (s) => s.client?.full_name ?? "",
+        cell: (sale) => sale.client?.full_name || "—",
+      },
+      {
+        key: "items",
+        header: "Items",
+        align: "center",
+        cell: (sale) => getTotalItems(sale.items),
+      },
+      {
+        key: "subtotal",
+        header: "Subtotal",
+        align: "right",
+        className: "hidden md:table-cell text-muted-foreground",
+        sortAccessor: (s) => s.subtotal,
+        cell: (sale) => formatCOP(sale.subtotal),
+      },
+      {
+        key: "discount",
+        header: "Descuento",
+        align: "right",
+        className: "hidden lg:table-cell text-muted-foreground",
+        cell: (sale) => getDiscountDisplay(sale),
+      },
+      {
+        key: "shipping",
+        header: "Envío",
+        align: "right",
+        className: "hidden lg:table-cell text-muted-foreground",
+        cell: (sale) => (sale.shipping_cost > 0 ? formatCOP(sale.shipping_cost) : "-"),
+      },
+      {
+        key: "total",
+        header: "Total",
+        align: "right",
+        sortAccessor: (s) => s.total,
+        cell: (sale) => (
+          <span className="font-semibold text-gold">{formatCOP(sale.total)}</span>
+        ),
+        footer: formatCOP(filteredSales.reduce((sum, s) => sum + s.total, 0)),
+      },
+      {
+        key: "status",
+        header: "Estado",
+        align: "center",
+        cell: (sale) => <StatusBadge status={sale.status} />,
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (sale) => (
+          <div
+            className="flex items-center justify-end gap-0.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => handleViewDetail(sale)}>
+                  <Eye size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Ver detalle</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => handlePrint(sale)}>
+                  <Printer size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Imprimir recibo</TooltipContent>
+            </Tooltip>
+            {sale.is_credit && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-gold hover:text-gold"
+                    onClick={() => handleViewAbonos(sale)}
+                  >
+                    <CreditCard size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Ver abonos</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        ),
+      },
+    ],
+    [filteredSales]
+  )
+
   // === Estado de carga (skeleton) ===
   if (loading) {
-    return (
-      <div className="space-y-6">
-        <Skeleton className="h-10 w-56 skeleton-shimmer" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-[100px] rounded-xl skeleton-shimmer" />
-          ))}
-        </div>
-        <div className="flex gap-3">
-          <Skeleton className="h-9 w-64 skeleton-shimmer" />
-          <Skeleton className="h-9 w-40 skeleton-shimmer" />
-        </div>
-        <Skeleton className="h-96 rounded-xl skeleton-shimmer" />
-      </div>
-    )
+    return <PageSkeleton stats={4} rows={8} cols={7} />
   }
 
   return (
-    <div className="space-y-6">
-      {/* Encabezado de página */}
-      <PageHeader title="Facturación" description="Gestión de facturas y recibos térmicos">
+    <PageShell
+      title="Facturación"
+      description="Gestión de facturas y recibos térmicos"
+      actions={
         <Button onClick={() => setShowNuevaFactura(true)}>
           <Plus size={18} className="mr-1.5" />
           Nueva Factura
         </Button>
-      </PageHeader>
-
+      }
+    >
       {/* Tarjetas de estadísticas */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Facturas del mes"
           value={stats.cantidadFacturas}
@@ -215,23 +340,26 @@ export default function FacturacionPage() {
           format="number"
           borderColor="warning"
           delay={3}
+          active={statusFilter === "pending"}
+          onClick={() =>
+            setStatusFilter((s) => (s === "pending" ? "all" : "pending"))
+          }
         />
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search
-            size={16}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            placeholder="Buscar por # factura o cliente..."
+      <FilterBar
+        search={
+          <SearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
+            onValueChange={setSearch}
+            placeholder="Buscar por # factura o cliente..."
+            wrapperClassName="max-w-sm"
           />
-        </div>
+        }
+        hasActiveFilters={hasActiveFilters}
+        onClear={clearFilters}
+      >
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder="Estado" />
@@ -245,181 +373,30 @@ export default function FacturacionPage() {
             ))}
           </SelectContent>
         </Select>
-      </div>
+      </FilterBar>
 
-      {/* Tabla de facturas o estado vacío */}
-      {filteredSales.length === 0 ? (
-        <EmptyState
-          icon={Receipt}
-          title="Sin facturas"
-          description={
-            sales.length === 0
-              ? "A\u00FAn no se han creado facturas. Crea la primera para empezar."
-              : "No se encontraron facturas con los filtros aplicados."
-          }
-        >
-          {sales.length === 0 && (
-            <Button className="mt-2" onClick={() => setShowNuevaFactura(true)}>
+      {/* Tabla de facturas */}
+      <DataTable
+        data={filteredSales}
+        columns={columns}
+        rowKey={(s) => s.id}
+        onRowClick={handleViewDetail}
+        isFiltered={hasActiveFilters}
+        pageSize={25}
+        showFooter
+        empty={{
+          icon: Receipt,
+          title: "Sin facturas",
+          description:
+            "Aún no se han creado facturas. Crea la primera para empezar.",
+          action: (
+            <Button onClick={() => setShowNuevaFactura(true)}>
               <Plus size={18} className="mr-1.5" />
               Crear primera factura
             </Button>
-          )}
-        </EmptyState>
-      ) : (
-        <div className="bg-card rounded-xl border border-border overflow-hidden shadow-card">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-cream hover:bg-cream">
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                    # Factura
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                    Fecha
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                    Cliente
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-center">
-                    Items
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right hidden md:table-cell">
-                    Subtotal
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right hidden lg:table-cell">
-                    Descuento
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right hidden lg:table-cell">
-                    Envío
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right">
-                    Total
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-center">
-                    Estado
-                  </TableHead>
-                  <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right">
-                    Acciones
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredSales.map((sale) => (
-                  <TableRow
-                    key={sale.id}
-                    className="hover:bg-cream-dark/50 transition-colors cursor-pointer"
-                    onClick={() => handleViewDetail(sale)}
-                  >
-                    {/* Número de factura */}
-                    <TableCell className="font-semibold text-sm text-gold">
-                      <span className="flex items-center gap-1.5">
-                        {sale.invoice_number}
-                        {sale.is_credit && (
-                          <span title="Crédito">
-                            <CreditCard size={13} className="text-warning" />
-                          </span>
-                        )}
-                      </span>
-                    </TableCell>
-
-                    {/* Fecha */}
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatDateShort(sale.sale_date || sale.created_at)}
-                    </TableCell>
-
-                    {/* Cliente */}
-                    <TableCell className="text-sm">
-                      {sale.client?.full_name || "—"}
-                    </TableCell>
-
-                    {/* Cantidad de items */}
-                    <TableCell className="text-sm text-center tabular-nums">
-                      {getTotalItems(sale.items)}
-                    </TableCell>
-
-                    {/* Subtotal */}
-                    <TableCell className="text-sm text-right tabular-nums text-muted-foreground hidden md:table-cell">
-                      {formatCOP(sale.subtotal)}
-                    </TableCell>
-
-                    {/* Descuento */}
-                    <TableCell className="text-sm text-right tabular-nums text-muted-foreground hidden lg:table-cell">
-                      {getDiscountDisplay(sale)}
-                    </TableCell>
-
-                    {/* Envío */}
-                    <TableCell className="text-sm text-right tabular-nums text-muted-foreground hidden lg:table-cell">
-                      {sale.shipping_cost > 0 ? formatCOP(sale.shipping_cost) : "-"}
-                    </TableCell>
-
-                    {/* Total */}
-                    <TableCell className="text-sm text-right font-semibold text-gold tabular-nums">
-                      {formatCOP(sale.total)}
-                    </TableCell>
-
-                    {/* Estado */}
-                    <TableCell className="text-center">
-                      <StatusBadge status={sale.status} />
-                    </TableCell>
-
-                    {/* Acciones */}
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          title="Ver detalle"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleViewDetail(sale)
-                          }}
-                        >
-                          <Eye size={14} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          title="Imprimir recibo"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handlePrint(sale)
-                          }}
-                        >
-                          <Printer size={14} />
-                        </Button>
-                        {sale.is_credit && (
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            title="Ver abonos"
-                            className="text-gold hover:text-gold"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleViewAbonos(sale)
-                            }}
-                          >
-                            <CreditCard size={14} />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Pie de tabla con resumen */}
-          <div className="px-4 py-3 bg-cream border-t border-border flex justify-between text-sm">
-            <span className="text-muted-foreground">
-              {filteredSales.length} factura{filteredSales.length !== 1 ? "s" : ""}
-            </span>
-            <span className="font-semibold text-gold tabular-nums">
-              {formatCOP(filteredSales.reduce((sum, s) => sum + s.total, 0))}
-            </span>
-          </div>
-        </div>
-      )}
+          ),
+        }}
+      />
 
       {/* ============================================================ */}
       {/* DIÁLOGOS */}
@@ -452,6 +429,14 @@ export default function FacturacionPage() {
         sale={selectedSale}
         onPaymentRegistered={fetchSales}
       />
-    </div>
+    </PageShell>
+  )
+}
+
+export default function FacturacionPage() {
+  return (
+    <Suspense fallback={<PageSkeleton stats={4} rows={8} cols={7} />}>
+      <FacturacionPageInner />
+    </Suspense>
   )
 }

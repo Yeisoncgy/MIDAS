@@ -14,6 +14,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
@@ -34,7 +35,7 @@ export function AddStockDialog({
   onCompleted,
 }: AddStockDialogProps) {
   const [quantity, setQuantity] = useState("")
-  const [costPerUnit, setCostPerUnit] = useState("")
+  const [costPerUnit, setCostPerUnit] = useState<number | null>(null)
   const [notes, setNotes] = useState("")
   const [loading, setLoading] = useState(false)
   const supabase = createClient()
@@ -51,7 +52,7 @@ export function AddStockDialog({
       return
     }
 
-    const cost = costPerUnit ? parseFloat(costPerUnit) : material.cost_per_unit
+    const cost = costPerUnit ?? material.cost_per_unit
 
     setLoading(true)
 
@@ -90,7 +91,7 @@ export function AddStockDialog({
 
       // Limpiar y cerrar
       setQuantity("")
-      setCostPerUnit("")
+      setCostPerUnit(null)
       setNotes("")
       onOpenChange(false)
       onCompleted()
@@ -130,16 +131,14 @@ export function AddStockDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="rm-cost">Costo unitario (COP)</Label>
-              <Input
+              <MoneyInput
                 id="rm-cost"
-                type="number"
-                min="0"
                 placeholder={String(material.cost_per_unit)}
                 value={costPerUnit}
-                onChange={(e) => setCostPerUnit(e.target.value)}
+                onValueChange={setCostPerUnit}
                 disabled={loading}
               />
-              {!costPerUnit && (
+              {costPerUnit === null && (
                 <p className="text-xs text-muted-foreground">
                   Actual: {formatCOP(material.cost_per_unit)}
                 </p>

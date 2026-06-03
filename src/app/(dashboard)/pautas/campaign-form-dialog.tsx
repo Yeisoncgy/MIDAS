@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Loader2, ChevronDown, ChevronUp } from "lucide-react"
+import { Loader2, ChevronDown, ChevronUp, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
 import {
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { MoneyInput } from "@/components/ui/money-input"
 import {
   Select,
   SelectContent,
@@ -22,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { formatCOP } from "@/lib/format"
 import type { Campaign } from "@/lib/types"
 
 interface CampaignFormDialogProps {
@@ -66,7 +68,7 @@ export function CampaignFormDialog({
   const [platform, setPlatform] = useState("Instagram")
   const [startDate, setStartDate] = useState("")
   const [endDate, setEndDate] = useState("")
-  const [budget, setBudget] = useState(0)
+  const [budget, setBudget] = useState<number | null>(null)
   const [objective, setObjective] = useState("messages")
   const [status, setStatus] = useState("active")
   const [notes, setNotes] = useState("")
@@ -78,7 +80,7 @@ export function CampaignFormDialog({
   const [clicks, setClicks] = useState(0)
   const [messagesReceived, setMessagesReceived] = useState(0)
   const [salesAttributed, setSalesAttributed] = useState(0)
-  const [revenueGenerated, setRevenueGenerated] = useState(0)
+  const [revenueGenerated, setRevenueGenerated] = useState<number | null>(null)
 
   const [loading, setLoading] = useState(false)
 
@@ -107,7 +109,7 @@ export function CampaignFormDialog({
         setPlatform("Instagram")
         setStartDate(new Date().toISOString().split("T")[0])
         setEndDate("")
-        setBudget(0)
+        setBudget(null)
         setObjective("messages")
         setStatus("active")
         setNotes("")
@@ -116,18 +118,28 @@ export function CampaignFormDialog({
         setClicks(0)
         setMessagesReceived(0)
         setSalesAttributed(0)
-        setRevenueGenerated(0)
+        setRevenueGenerated(null)
         setShowMetrics(false)
       }
     }
   }, [open, campaign])
+
+  // Previsualizacion en vivo de las metricas derivadas (mismo calculo que al guardar)
+  const budgetNum = budget || 0
+  const revenueNum = revenueGenerated || 0
+  const previewCostPerMessage = messagesReceived > 0 ? Math.round(budgetNum / messagesReceived) : null
+  const previewRoi =
+    revenueNum > 0 && budgetNum > 0
+      ? Math.round(((revenueNum - budgetNum) / budgetNum) * 100 * 100) / 100
+      : null
+  const previewCac = salesAttributed > 0 ? Math.round((budgetNum / salesAttributed) * 100) / 100 : null
 
   const handleSubmit = async () => {
     if (!name.trim()) {
       toast.error("El nombre de la campana es obligatorio")
       return
     }
-    if (budget <= 0) {
+    if (!budget || budget <= 0) {
       toast.error("El presupuesto debe ser mayor a 0")
       return
     }
@@ -141,8 +153,8 @@ export function CampaignFormDialog({
     try {
       // Auto-calc metricas derivadas
       const costPerMessage = messagesReceived > 0 ? budget / messagesReceived : null
-      const roi = revenueGenerated > 0 && budget > 0
-        ? Math.round(((revenueGenerated - budget) / budget) * 100 * 100) / 100
+      const roi = revenueNum > 0 && budget > 0
+        ? Math.round(((revenueNum - budget) / budget) * 100 * 100) / 100
         : null
       const cac = salesAttributed > 0 ? Math.round((budget / salesAttributed) * 100) / 100 : null
 
@@ -161,7 +173,7 @@ export function CampaignFormDialog({
         messages_received: messagesReceived || 0,
         cost_per_message: costPerMessage,
         sales_attributed: salesAttributed || 0,
-        revenue_generated: revenueGenerated || 0,
+        revenue_generated: revenueNum || 0,
         roi,
         cac,
       }
@@ -243,11 +255,9 @@ export function CampaignFormDialog({
 
           <div>
             <Label className="text-xs text-muted-foreground mb-1">Presupuesto *</Label>
-            <Input
-              type="number"
-              min={1}
-              value={budget || ""}
-              onChange={(e) => setBudget(parseInt(e.target.value) || 0)}
+            <MoneyInput
+              value={budget}
+              onValueChange={setBudget}
               placeholder="0"
               disabled={loading}
             />
@@ -274,23 +284,21 @@ export function CampaignFormDialog({
             </div>
           </div>
 
-          {isEditing && (
-            <div>
-              <Label className="text-xs text-muted-foreground mb-1">Estado</Label>
-              <Select value={status} onValueChange={setStatus}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATUS_OPTIONS.map((s) => (
-                    <SelectItem key={s.value} value={s.value}>
-                      {s.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
+          <div>
+            <Label className="text-xs text-muted-foreground mb-1">Estado</Label>
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_OPTIONS.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
           <div>
             <Label className="text-xs text-muted-foreground mb-1">Notas (opcional)</Label>
@@ -303,93 +311,135 @@ export function CampaignFormDialog({
             />
           </div>
 
-          {/* Metricas - seccion colapsable */}
-          {isEditing && (
-            <div className="border border-border rounded-lg overflow-hidden">
-              <button
-                type="button"
-                className="w-full flex items-center justify-between px-4 py-3 bg-cream hover:bg-cream-dark/50 transition-colors text-sm font-semibold text-muted-foreground"
-                onClick={() => setShowMetrics(!showMetrics)}
-              >
-                <span className="text-xs uppercase tracking-[0.05em]">Metricas de rendimiento</span>
-                {showMetrics ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </button>
+          {/* Metricas - seccion colapsable (disponible al crear y al editar) */}
+          <div className="border border-border rounded-lg overflow-hidden">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 bg-cream hover:bg-cream-dark/50 transition-colors text-sm font-semibold text-muted-foreground"
+              onClick={() => setShowMetrics(!showMetrics)}
+            >
+              <span className="text-xs uppercase tracking-[0.05em]">Metricas de rendimiento</span>
+              {showMetrics ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
 
-              {showMetrics && (
-                <div className="p-4 space-y-3">
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Alcance</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={reach || ""}
-                        onChange={(e) => setReach(parseInt(e.target.value) || 0)}
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Impresiones</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={impressions || ""}
-                        onChange={(e) => setImpressions(parseInt(e.target.value) || 0)}
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Clicks</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={clicks || ""}
-                        onChange={(e) => setClicks(parseInt(e.target.value) || 0)}
-                        placeholder="0"
-                      />
+            {showMetrics && (
+              <div className="p-4 space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">Alcance</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={reach || ""}
+                      onChange={(e) => setReach(parseInt(e.target.value) || 0)}
+                      placeholder="0"
+                      disabled={loading}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">Impresiones</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={impressions || ""}
+                      onChange={(e) => setImpressions(parseInt(e.target.value) || 0)}
+                      placeholder="0"
+                      disabled={loading}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">Clicks</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={clicks || ""}
+                      onChange={(e) => setClicks(parseInt(e.target.value) || 0)}
+                      placeholder="0"
+                      disabled={loading}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">Mensajes</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={messagesReceived || ""}
+                      onChange={(e) => setMessagesReceived(parseInt(e.target.value) || 0)}
+                      placeholder="0"
+                      disabled={loading}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">Ventas atribuidas</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={salesAttributed || ""}
+                      onChange={(e) => setSalesAttributed(parseInt(e.target.value) || 0)}
+                      placeholder="0"
+                      disabled={loading}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground mb-1">Ingresos generados</Label>
+                    <MoneyInput
+                      value={revenueGenerated}
+                      onValueChange={setRevenueGenerated}
+                      placeholder="0"
+                      disabled={loading}
+                    />
+                  </div>
+                </div>
+
+                {/* Preview en vivo de metricas derivadas */}
+                {(previewRoi !== null || previewCac !== null || previewCostPerMessage !== null) ? (
+                  <div className="rounded-lg border border-border bg-card p-3">
+                    <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-muted-foreground">
+                      <Sparkles size={12} className="text-gold" />
+                      Calculado automaticamente
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                        <p className="text-[11px] text-muted-foreground">ROI</p>
+                        <p
+                          className={`text-sm font-semibold tabular-nums ${
+                            previewRoi === null
+                              ? "text-muted-foreground"
+                              : previewRoi >= 0
+                              ? "text-success"
+                              : "text-error"
+                          }`}
+                        >
+                          {previewRoi === null
+                            ? "—"
+                            : `${previewRoi > 0 ? "+" : ""}${previewRoi}%`}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-muted-foreground">CAC</p>
+                        <p className="text-sm font-semibold tabular-nums text-foreground">
+                          {previewCac === null ? "—" : formatCOP(previewCac)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] text-muted-foreground">Costo/mensaje</p>
+                        <p className="text-sm font-semibold tabular-nums text-foreground">
+                          {previewCostPerMessage === null ? "—" : formatCOP(previewCostPerMessage)}
+                        </p>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Mensajes</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={messagesReceived || ""}
-                        onChange={(e) => setMessagesReceived(parseInt(e.target.value) || 0)}
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Ventas atribuidas</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={salesAttributed || ""}
-                        onChange={(e) => setSalesAttributed(parseInt(e.target.value) || 0)}
-                        placeholder="0"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Ingresos generados</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        value={revenueGenerated || ""}
-                        onChange={(e) => setRevenueGenerated(parseInt(e.target.value) || 0)}
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
-
+                ) : (
                   <p className="text-xs text-muted-foreground">
                     ROI, CAC y costo por mensaje se calculan automaticamente al guardar.
                   </p>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <DialogFooter>

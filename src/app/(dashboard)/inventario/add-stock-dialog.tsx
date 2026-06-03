@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { MoneyInput } from "@/components/ui/money-input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
@@ -23,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { cn } from "@/lib/utils"
 import { formatCOP } from "@/lib/format"
 
 interface Variant {
@@ -48,7 +48,7 @@ export function AddStockDialog({ open, onOpenChange, onCompleted }: AddStockDial
   const [variants, setVariants] = useState<Variant[]>([])
   const [selectedId, setSelectedId] = useState("")
   const [quantity, setQuantity] = useState("")
-  const [costPerUnit, setCostPerUnit] = useState("")
+  const [costPerUnit, setCostPerUnit] = useState<number | null>(null)
   const [notes, setNotes] = useState("")
   const [loading, setLoading] = useState(false)
   const [loadingVariants, setLoadingVariants] = useState(true)
@@ -91,7 +91,7 @@ export function AddStockDialog({ open, onOpenChange, onCompleted }: AddStockDial
       return
     }
 
-    const cost = costPerUnit ? parseFloat(costPerUnit) : selectedVariant?.cost_per_unit || 0
+    const cost = costPerUnit != null ? costPerUnit : selectedVariant?.cost_per_unit || 0
 
     setLoading(true)
 
@@ -135,7 +135,7 @@ export function AddStockDialog({ open, onOpenChange, onCompleted }: AddStockDial
       // Limpiar y cerrar
       setSelectedId("")
       setQuantity("")
-      setCostPerUnit("")
+      setCostPerUnit(null)
       setNotes("")
       onOpenChange(false)
       onCompleted()
@@ -205,16 +205,14 @@ export function AddStockDialog({ open, onOpenChange, onCompleted }: AddStockDial
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="cost">Costo unitario (COP)</Label>
-              <Input
+              <MoneyInput
                 id="cost"
-                type="number"
-                min="0"
-                placeholder={selectedVariant ? String(selectedVariant.cost_per_unit) : "0"}
                 value={costPerUnit}
-                onChange={(e) => setCostPerUnit(e.target.value)}
+                onValueChange={setCostPerUnit}
+                placeholder={selectedVariant ? String(selectedVariant.cost_per_unit) : "0"}
                 disabled={loading}
               />
-              {selectedVariant && !costPerUnit && (
+              {selectedVariant && costPerUnit == null && (
                 <p className="text-xs text-muted-foreground">
                   Actual: {formatCOP(selectedVariant.cost_per_unit)}
                 </p>

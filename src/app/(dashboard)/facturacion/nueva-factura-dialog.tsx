@@ -3,11 +3,14 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import {
   X,
-  Search,
   UserPlus,
   Loader2,
   ShoppingCart,
   CreditCard,
+  User,
+  Receipt,
+  Minus,
+  Plus,
 } from "lucide-react"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
@@ -23,6 +26,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { MoneyInput } from "@/components/ui/money-input"
+import { SearchInput } from "@/components/shared/search-input"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -31,6 +37,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { formatCOP } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { PAYMENT_METHODS, SALE_CHANNELS } from "@/lib/constants"
 import { registerCashMovement, findAccountForMethod } from "@/lib/cash-movements"
 import type { Client, ProductVariant, Product } from "@/lib/types"
@@ -82,6 +89,7 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
   const [catalogVariants, setCatalogVariants] = useState<VariantWithProduct[]>([])
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [catalogSearch, setCatalogSearch] = useState("")
+  const debouncedCatalogSearch = useDebounce(catalogSearch, 250)
   const [cartItems, setCartItems] = useState<CartItem[]>([])
 
   // === Estado de totales y pagos ===
@@ -200,12 +208,12 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
 
   // === Productos agrupados y filtrados para el catálogo ===
   const catalogProducts = useMemo(() => {
-    const searchLower = catalogSearch.toLowerCase()
+    const searchLower = debouncedCatalogSearch.toLowerCase()
     const idsInCart = new Set(cartItems.map((ci) => ci.variantId))
 
     const filtered = catalogVariants.filter((v) => {
       if (idsInCart.has(v.id)) return false
-      if (!catalogSearch) return true
+      if (!debouncedCatalogSearch) return true
       return (
         v.product.name?.toLowerCase().includes(searchLower) ||
         v.color?.toLowerCase().includes(searchLower) ||
@@ -224,7 +232,7 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
     }
 
     return Array.from(groups.values())
-  }, [catalogVariants, catalogSearch, cartItems])
+  }, [catalogVariants, debouncedCatalogSearch, cartItems])
 
   // === Crear cliente rápido ===
   const handleQuickCreateClient = useCallback(async () => {
@@ -585,7 +593,10 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
     >
       <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="font-[family-name:var(--font-display)] text-xl">
+          <DialogTitle className="flex items-center gap-3 font-[family-name:var(--font-display)] text-xl">
+            <span className="flex size-9 items-center justify-center rounded-lg bg-gold/10 text-gold">
+              <Receipt size={18} />
+            </span>
             Nueva Factura
           </DialogTitle>
         </DialogHeader>
@@ -595,37 +606,47 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
           {/* SECCIÓN: CLIENTE */}
           {/* ============================================================ */}
           <div className="space-y-3">
-            <Label className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-              Cliente
-            </Label>
+            <div className="flex items-center gap-2">
+              <User size={15} className="text-gold" />
+              <Label className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
+                Cliente
+              </Label>
+            </div>
 
             {/* Cliente seleccionado */}
             {selectedClient ? (
-              <div className="flex items-center justify-between bg-cream rounded-lg p-3">
-                <div>
-                  <p className="text-sm font-semibold">{selectedClient.full_name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {[selectedClient.phone_whatsapp, selectedClient.city]
-                      .filter(Boolean)
-                      .join(" \u00B7 ")}
-                  </p>
+              <div className="flex items-center justify-between rounded-lg border border-gold/30 bg-gold/5 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex size-9 items-center justify-center rounded-full bg-gold/15 text-gold">
+                    <User size={16} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">{selectedClient.full_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {[selectedClient.phone_whatsapp, selectedClient.city]
+                        .filter(Boolean)
+                        .join(" \u00B7 ") || "Sin datos de contacto"}
+                    </p>
+                  </div>
                 </div>
-                <Button variant="ghost" size="icon-xs" onClick={handleClearClient}>
-                  <X size={14} />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-xs" onClick={handleClearClient}>
+                      <X size={14} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Quitar cliente</TooltipContent>
+                </Tooltip>
               </div>
             ) : (
               <div className="space-y-2">
                 {/* Buscador de clientes */}
                 <div className="relative">
-                  <Search
-                    size={16}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                  />
-                  <Input
-                    placeholder="Buscar por nombre o teléfono..."
+                  <SearchInput
                     value={clientSearch}
-                    onChange={(e) => setClientSearch(e.target.value)}
+                    onValueChange={setClientSearch}
+                    placeholder="Buscar por nombre o teléfono..."
+                    wrapperClassName="w-full"
                     onFocus={() => {
                       if (clientResults.length > 0) setShowClientDropdown(true)
                     }}
@@ -633,10 +654,9 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
                       // Delay para permitir el clic en un resultado
                       setTimeout(() => setShowClientDropdown(false), 200)
                     }}
-                    className="pl-9"
                   />
                   {searchingClients && (
-                    <Loader2 size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground animate-spin" />
+                    <Loader2 size={16} className="absolute right-9 top-1/2 -translate-y-1/2 text-muted-foreground animate-spin" />
                   )}
 
                   {/* Dropdown de resultados */}
@@ -729,9 +749,19 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
           {/* SECCIÓN: PRODUCTOS */}
           {/* ============================================================ */}
           <div className="space-y-3">
-            <Label className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-              Productos
-            </Label>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShoppingCart size={15} className="text-gold" />
+                <Label className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
+                  Productos
+                </Label>
+              </div>
+              {cartItems.length > 0 && (
+                <span className="rounded-full bg-gold/10 px-2 py-0.5 text-[11px] font-semibold text-gold">
+                  {cartItems.length} en el carrito
+                </span>
+              )}
+            </div>
 
             {/* Items del carrito */}
             {cartItems.length > 0 && (
@@ -739,7 +769,7 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
                 {cartItems.map((item, index) => (
                   <div
                     key={item.variantId}
-                    className="bg-cream rounded-lg p-3"
+                    className="rounded-lg border border-border bg-card p-3 shadow-xs"
                   >
                     <div className="flex items-start justify-between gap-2">
                       {/* Info del producto */}
@@ -762,46 +792,69 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
                       </div>
 
                       {/* Botón eliminar */}
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        className="text-muted-foreground hover:text-error shrink-0"
-                        onClick={() => handleRemoveItem(index)}
-                      >
-                        <X size={14} />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-muted-foreground hover:text-error shrink-0"
+                            onClick={() => handleRemoveItem(index)}
+                          >
+                            <X size={14} />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Quitar del carrito</TooltipContent>
+                      </Tooltip>
                     </div>
 
                     {/* Controles de cantidad y precio */}
-                    <div className="grid grid-cols-3 gap-2 mt-2">
+                    <div className="grid grid-cols-3 gap-2 mt-2 items-end">
                       <div>
-                        <Label className="text-xs text-muted-foreground">Cantidad</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={item.variant.stock}
-                          value={item.quantity}
-                          onChange={(e) =>
-                            handleUpdateQuantity(index, parseInt(e.target.value) || 1)
-                          }
-                          className="h-8 text-sm"
-                        />
+                        <Label className="text-xs text-muted-foreground mb-1 block">Cantidad</Label>
+                        <div className="flex h-9 items-center rounded-md border border-input bg-transparent">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateQuantity(index, item.quantity - 1)}
+                            disabled={item.quantity <= 1}
+                            className="flex size-8 items-center justify-center rounded-l-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                            aria-label="Disminuir cantidad"
+                          >
+                            <Minus size={14} />
+                          </button>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={item.quantity}
+                            onChange={(e) =>
+                              handleUpdateQuantity(
+                                index,
+                                parseInt(e.target.value.replace(/\D/g, "")) || 1
+                              )
+                            }
+                            className="w-full min-w-0 flex-1 bg-transparent text-center text-sm tabular-nums outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateQuantity(index, item.quantity + 1)}
+                            disabled={item.quantity >= item.variant.stock}
+                            className="flex size-8 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                            aria-label="Aumentar cantidad"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
                       </div>
                       <div>
-                        <Label className="text-xs text-muted-foreground">Precio unitario</Label>
-                        <Input
-                          type="number"
-                          min={0}
+                        <Label className="text-xs text-muted-foreground mb-1 block">Precio unitario</Label>
+                        <MoneyInput
                           value={item.unitPrice}
-                          onChange={(e) =>
-                            handleUpdatePrice(index, parseInt(e.target.value) || 0)
-                          }
-                          className="h-8 text-sm"
+                          onValueChange={(v) => handleUpdatePrice(index, v ?? 0)}
+                          placeholder="0"
                         />
                       </div>
                       <div>
-                        <Label className="text-xs text-muted-foreground">Subtotal</Label>
-                        <div className="h-8 flex items-center text-sm font-semibold text-gold tabular-nums">
+                        <Label className="text-xs text-muted-foreground mb-1 block">Subtotal</Label>
+                        <div className="flex h-9 items-center justify-end text-sm font-semibold text-gold tabular-nums">
                           {formatCOP(item.subtotal)}
                         </div>
                       </div>
@@ -819,18 +872,12 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
 
             {/* Catálogo visual de productos */}
             <div className="space-y-2">
-              <div className="relative">
-                <Search
-                  size={16}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                />
-                <Input
-                  placeholder="Filtrar productos..."
-                  value={catalogSearch}
-                  onChange={(e) => setCatalogSearch(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
+              <SearchInput
+                value={catalogSearch}
+                onValueChange={setCatalogSearch}
+                placeholder="Filtrar productos..."
+                wrapperClassName="w-full"
+              />
 
               {loadingCatalog ? (
                 <div className="flex items-center justify-center py-8">
@@ -919,7 +966,7 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
             <div className="grid grid-cols-3 gap-3">
               {/* Tipo de descuento */}
               <div>
-                <Label className="text-xs text-muted-foreground mb-1">Tipo descuento</Label>
+                <Label className="text-xs text-muted-foreground mb-1 block">Tipo descuento</Label>
                 <Select
                   value={discountType}
                   onValueChange={(val) => setDiscountType(val as "percentage" | "fixed")}
@@ -936,27 +983,40 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
 
               {/* Valor del descuento */}
               <div>
-                <Label className="text-xs text-muted-foreground mb-1">
+                <Label className="text-xs text-muted-foreground mb-1 block">
                   {discountType === "percentage" ? "% Descuento" : "Valor descuento"}
                 </Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={discountType === "percentage" ? 100 : subtotal}
-                  value={discountValue || ""}
-                  onChange={(e) => setDiscountValue(parseInt(e.target.value) || 0)}
-                  placeholder="0"
-                />
+                {discountType === "percentage" ? (
+                  <div className="relative">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={discountValue || ""}
+                      onChange={(e) => setDiscountValue(parseInt(e.target.value) || 0)}
+                      placeholder="0"
+                      className="pr-7 text-right tabular-nums"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                      %
+                    </span>
+                  </div>
+                ) : (
+                  <MoneyInput
+                    value={discountValue || null}
+                    onValueChange={(v) => setDiscountValue(v ?? 0)}
+                    max={subtotal}
+                    placeholder="0"
+                  />
+                )}
               </div>
 
               {/* Costo de envío */}
               <div>
-                <Label className="text-xs text-muted-foreground mb-1">Costo envío</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  value={shippingCost || ""}
-                  onChange={(e) => setShippingCost(parseInt(e.target.value) || 0)}
+                <Label className="text-xs text-muted-foreground mb-1 block">Costo envío</Label>
+                <MoneyInput
+                  value={shippingCost || null}
+                  onValueChange={(v) => setShippingCost(v ?? 0)}
                   placeholder="0"
                 />
               </div>
@@ -1032,7 +1092,7 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
                   <div className="grid grid-cols-2 gap-3">
                     {/* Cuotas */}
                     <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Número de cuotas</Label>
+                      <Label className="text-xs text-muted-foreground mb-1 block">Número de cuotas</Label>
                       <Select
                         value={String(creditInstallments)}
                         onValueChange={(val) => setCreditInstallments(parseInt(val))}
@@ -1050,13 +1110,13 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
 
                     {/* Abono inicial */}
                     <div>
-                      <Label className="text-xs text-muted-foreground mb-1">Abono inicial</Label>
-                      <Input
-                        type="number"
-                        min={0}
+                      <Label className="text-xs text-muted-foreground mb-1 block">Abono inicial</Label>
+                      <MoneyInput
+                        value={initialPayment || null}
+                        onValueChange={(v) => setInitialPayment(v ?? 0)}
                         max={totalWithFee}
-                        value={initialPayment || ""}
-                        onChange={(e) => setInitialPayment(parseInt(e.target.value) || 0)}
+                        showMaxButton
+                        maxButtonLabel="Total"
                         placeholder="0"
                       />
                     </div>
@@ -1115,7 +1175,7 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
             <div className="grid grid-cols-2 gap-3">
               {/* Método de pago */}
               <div>
-                <Label className="text-xs text-muted-foreground mb-1">Método de pago</Label>
+                <Label className="text-xs text-muted-foreground mb-1 block">Método de pago</Label>
                 <Select value={paymentMethod} onValueChange={setPaymentMethod}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -1132,7 +1192,7 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
 
               {/* Canal de venta */}
               <div>
-                <Label className="text-xs text-muted-foreground mb-1">Canal de venta</Label>
+                <Label className="text-xs text-muted-foreground mb-1 block">Canal de venta</Label>
                 <Select value={saleChannel} onValueChange={setSaleChannel}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -1168,21 +1228,34 @@ export function NuevaFacturaDialog({ open, onOpenChange, onCompleted }: NuevaFac
         {/* ============================================================ */}
         {/* ACCIONES DEL FORMULARIO */}
         {/* ============================================================ */}
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => {
-              resetForm()
-              onOpenChange(false)
-            }}
-            disabled={submitting}
-          >
-            Cancelar
-          </Button>
-          <Button onClick={handleSubmit} disabled={submitting}>
-            {submitting && <Loader2 size={18} className="mr-1.5 animate-spin" />}
-            Crear Factura
-          </Button>
+        <DialogFooter className="flex-row items-center sm:justify-between gap-3 border-t border-border pt-4">
+          <div className="hidden sm:flex flex-col">
+            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              {isCredit ? "Saldo a financiar" : "Total a cobrar"}
+            </span>
+            <span className="font-[family-name:var(--font-display)] text-lg font-bold tabular-nums text-gold">
+              {formatCOP(isCredit ? totalWithFee : total)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                resetForm()
+                onOpenChange(false)
+              }}
+              disabled={submitting}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={submitting || !selectedClient || cartItems.length === 0}
+            >
+              {submitting && <Loader2 size={18} className="mr-1.5 animate-spin" />}
+              Crear Factura
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

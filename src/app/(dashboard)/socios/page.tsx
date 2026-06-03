@@ -1,26 +1,30 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react"
+import { useSearchParams } from "next/navigation"
 import {
   Users,
   Plus,
   Banknote,
-  Loader2,
-  Search,
   Pencil,
   Trash2,
   AlertTriangle,
   FileSpreadsheet,
   History,
+  Wallet,
+  Receipt,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
+import { PageShell } from "@/components/shared/page-shell"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { PageSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -28,16 +32,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { formatCOP, formatDateShort } from "@/lib/format"
 import { PAYMENT_METHODS } from "@/lib/constants"
+import { useDebounce } from "@/hooks/use-debounce"
 import { PeriodSelector } from "@/components/shared/period-selector"
 import { type PeriodKey, getDateRange } from "@/lib/date-periods"
 import { PartnerFormDialog } from "./partner-form-dialog"
@@ -50,6 +47,8 @@ import type { Partner, PartnerWithdrawal } from "@/lib/types"
 type WithdrawalExpanded = PartnerWithdrawal & {
   partner?: { name: string }
 }
+
+type TabKey = "socios" | "retiros" | "historial"
 
 interface MonthlyPartnerData {
   utilidad: number
@@ -67,8 +66,9 @@ interface MonthlyHistory {
   partners: Record<string, MonthlyPartnerData>
 }
 
-export default function SociosPage() {
+function SociosPageInner() {
   const supabase = createClient()
+  const searchParams = useSearchParams()
 
   // Data
   const [partners, setPartners] = useState<Partner[]>([])
@@ -85,7 +85,7 @@ export default function SociosPage() {
   const [loadingWithdrawals, setLoadingWithdrawals] = useState(true)
 
   // UI
-  const [activeTab, setActiveTab] = useState<"retiros" | "socios" | "historial">("retiros")
+  const [activeTab, setActiveTab] = useState<TabKey>("socios")
   const [showPartnerForm, setShowPartnerForm] = useState(false)
   const [showWithdrawalForm, setShowWithdrawalForm] = useState(false)
   const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null)
@@ -95,6 +95,7 @@ export default function SociosPage() {
 
   // Filtros retiros
   const [searchWithdrawal, setSearchWithdrawal] = useState("")
+  const debouncedSearch = useDebounce(searchWithdrawal, 250)
   const [partnerFilter, setPartnerFilter] = useState("all")
   const [methodFilter, setMethodFilter] = useState("all")
 
@@ -255,6 +256,7 @@ export default function SociosPage() {
     fetchPartners()
     fetchWithdrawals()
     fetchUtilidad()
+    setHistoryData([])
   }, [fetchPartners, fetchWithdrawals, fetchUtilidad])
 
   // Cargar historial cuando se abre el tab
@@ -264,17 +266,61 @@ export default function SociosPage() {
     }
   }, [activeTab, historyData.length, fetchHistory])
 
+  // ═══ Intent de creación (?nuevo=1 → registrar retiro) ═══
+  useEffect(() => {
+    if (searchParams.get("nuevo") === "1") {
+      setSelectedWithdrawal(null)
+      setSelectedPartner(null)
+      setShowWithdrawalForm(true)
+    }
+  }, [searchParams])
+
   // ═══ Derived ═══
-  const activePartners = partners.filter((p) => p.is_active)
-  const totalPercentage = partners.reduce((s, p) => s + p.distribution_percentage, 0)
+  const activePartners = useMemo(() => partners.filter((p) => p.is_active), [partners])
+  const totalPercentage = useMemo(
+    () => partners.reduce((s, p) => s + p.distribution_percentage, 0),
+    [partners]
+  )
   const utilidadDisponible = utilidadMes - retirosTotalMes
+
+  // ═══ Handlers ═══
+  const openNewWithdrawal = useCallback((partner?: Partner) => {
+    setSelectedWithdrawal(null)
+    setSelectedPartner(partner ?? null)
+    setShowWithdrawalForm(true)
+  }, [])
+
+  const openNewPartner = useCallback(() => {
+    setSelectedPartner(null)
+    setShowPartnerForm(true)
+  }, [])
+
+  const openEditPartner = useCallback((p: Partner) => {
+    setSelectedPartner(p)
+    setShowPartnerForm(true)
+  }, [])
+
+  const openEditWithdrawal = useCallback((w: WithdrawalExpanded) => {
+    setSelectedWithdrawal(w)
+    setShowWithdrawalForm(true)
+  }, [])
+
+  const openDeleteWithdrawal = useCallback((w: WithdrawalExpanded) => {
+    setSelectedWithdrawal(w)
+    setShowDeleteWithdrawal(true)
+  }, [])
+
+  const openDeletePartner = useCallback((p: Partner) => {
+    setSelectedPartner(p)
+    setShowDeletePartner(true)
+  }, [])
 
   // ═══ Filtrado de retiros ═══
   const filteredWithdrawals = useMemo(() => {
     let list = [...withdrawals]
 
-    if (searchWithdrawal.trim()) {
-      const q = searchWithdrawal.toLowerCase()
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase()
       list = list.filter(
         (w) =>
           w.partner?.name?.toLowerCase().includes(q) ||
@@ -291,48 +337,354 @@ export default function SociosPage() {
     }
 
     return list
-  }, [withdrawals, searchWithdrawal, partnerFilter, methodFilter])
+  }, [withdrawals, debouncedSearch, partnerFilter, methodFilter])
 
-  const filteredWithdrawalsTotal = filteredWithdrawals.reduce((s, w) => s + w.amount, 0)
+  const filteredWithdrawalsTotal = useMemo(
+    () => filteredWithdrawals.reduce((s, w) => s + w.amount, 0),
+    [filteredWithdrawals]
+  )
+
+  const hasActiveFilters =
+    !!searchWithdrawal || partnerFilter !== "all" || methodFilter !== "all"
+  const clearFilters = () => {
+    setSearchWithdrawal("")
+    setPartnerFilter("all")
+    setMethodFilter("all")
+  }
+
+  // ═══ Columnas: Retiros ═══
+  const withdrawalColumns = useMemo<Column<WithdrawalExpanded>[]>(
+    () => [
+      {
+        key: "date",
+        header: "Fecha",
+        className: "w-[120px]",
+        sortAccessor: (w) => w.withdrawal_date,
+        cell: (w) => (
+          <span className="text-muted-foreground tabular-nums">
+            {formatDateShort(w.withdrawal_date)}
+          </span>
+        ),
+      },
+      {
+        key: "partner",
+        header: "Socio",
+        sortAccessor: (w) => w.partner?.name ?? "",
+        cell: (w) => (
+          <span className="font-medium text-foreground">{w.partner?.name || "—"}</span>
+        ),
+      },
+      {
+        key: "amount",
+        header: "Monto",
+        align: "right",
+        sortAccessor: (w) => w.amount,
+        cell: (w) => (
+          <span className="font-semibold text-error">−{formatCOP(w.amount)}</span>
+        ),
+        footer: <span className="text-error">−{formatCOP(filteredWithdrawalsTotal)}</span>,
+      },
+      {
+        key: "method",
+        header: "Método",
+        className: "hidden md:table-cell",
+        sortAccessor: (w) => w.method,
+        cell: (w) =>
+          PAYMENT_METHODS.find((m) => m.value === w.method)?.label || w.method,
+      },
+      {
+        key: "notes",
+        header: "Notas",
+        className: "hidden lg:table-cell max-w-[180px]",
+        cell: (w) => (
+          <span className="block truncate text-xs text-muted-foreground">
+            {w.notes || "—"}
+          </span>
+        ),
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (w) => (
+          <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => openEditWithdrawal(w)}>
+                  <Pencil size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Editar retiro</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-error hover:text-error"
+                  onClick={() => openDeleteWithdrawal(w)}
+                >
+                  <Trash2 size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Eliminar retiro</TooltipContent>
+            </Tooltip>
+          </div>
+        ),
+      },
+    ],
+    [filteredWithdrawalsTotal, openEditWithdrawal, openDeleteWithdrawal]
+  )
+
+  // ═══ Columnas: Socios (gestión) ═══
+  const partnerColumns = useMemo<Column<Partner>[]>(
+    () => [
+      {
+        key: "name",
+        header: "Socio",
+        sortAccessor: (p) => p.name,
+        cell: (p) => (
+          <span className={`font-medium ${p.is_active ? "text-foreground" : "text-muted-foreground"}`}>
+            {p.name}
+          </span>
+        ),
+      },
+      {
+        key: "percentage",
+        header: "% Distribución",
+        sortAccessor: (p) => p.distribution_percentage,
+        cell: (p) => (
+          <div className="flex items-center gap-2">
+            <div className="w-20 overflow-hidden rounded-full bg-border h-1.5">
+              <div
+                className="h-full rounded-full bg-gold"
+                style={{ width: `${Math.min(100, p.distribution_percentage)}%` }}
+              />
+            </div>
+            <span className="text-sm font-semibold tabular-nums">
+              {p.distribution_percentage}%
+            </span>
+          </div>
+        ),
+        footer: (
+          <span className={totalPercentage > 100 ? "text-error" : "text-foreground"}>
+            {totalPercentage}%
+          </span>
+        ),
+      },
+      {
+        key: "utilidad",
+        header: "Utilidad periodo",
+        align: "right",
+        className: "hidden md:table-cell",
+        sortAccessor: (p) => utilidadMes * (p.distribution_percentage / 100),
+        cell: (p) => (
+          <span className="tabular-nums text-muted-foreground">
+            {formatCOP(utilidadMes * (p.distribution_percentage / 100))}
+          </span>
+        ),
+      },
+      {
+        key: "disponible",
+        header: "Disponible",
+        align: "right",
+        sortAccessor: (p) => partnerUtilities[p.id] || 0,
+        cell: (p) => {
+          const disp = partnerUtilities[p.id] || 0
+          return (
+            <span
+              className={`font-semibold tabular-nums ${
+                disp > 0 ? "text-success" : disp < 0 ? "text-error" : "text-muted-foreground"
+              }`}
+            >
+              {formatCOP(disp)}
+            </span>
+          )
+        },
+      },
+      {
+        key: "status",
+        header: "Estado",
+        align: "center",
+        cell: (p) => <StatusBadge status={p.is_active ? "active" : "inactive"} />,
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (p) => (
+          <div className="flex items-center justify-end gap-0.5" onClick={(e) => e.stopPropagation()}>
+            {p.is_active && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-xs" onClick={() => openNewWithdrawal(p)}>
+                    <Banknote size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Registrar retiro</TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => openEditPartner(p)}>
+                  <Pencil size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Editar socio</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-error hover:text-error"
+                  onClick={() => openDeletePartner(p)}
+                >
+                  <Trash2 size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Eliminar socio</TooltipContent>
+            </Tooltip>
+          </div>
+        ),
+      },
+    ],
+    [
+      totalPercentage,
+      utilidadMes,
+      partnerUtilities,
+      openNewWithdrawal,
+      openEditPartner,
+      openDeletePartner,
+    ]
+  )
+
+  // ═══ Columnas: Historial ═══
+  const historyColumns = useMemo<Column<MonthlyHistory>[]>(() => {
+    const base: Column<MonthlyHistory>[] = [
+      {
+        key: "month",
+        header: "Mes",
+        className: "capitalize font-medium",
+        cell: (m) => <span className="capitalize">{m.label}</span>,
+      },
+      {
+        key: "ventas",
+        header: "Ventas",
+        align: "right",
+        sortAccessor: (m) => m.ventas,
+        cell: (m) => <span className="tabular-nums">{formatCOP(m.ventas)}</span>,
+      },
+      {
+        key: "gastos",
+        header: "Gastos",
+        align: "right",
+        sortAccessor: (m) => m.gastos,
+        cell: (m) => <span className="tabular-nums text-error">{formatCOP(m.gastos)}</span>,
+      },
+      {
+        key: "utilidad",
+        header: "Utilidad",
+        align: "right",
+        sortAccessor: (m) => m.utilidad,
+        cell: (m) => (
+          <span
+            className={`font-semibold tabular-nums ${m.utilidad >= 0 ? "text-success" : "text-error"}`}
+          >
+            {formatCOP(m.utilidad)}
+          </span>
+        ),
+      },
+    ]
+
+    const partnerCols: Column<MonthlyHistory>[] = activePartners.map((p) => ({
+      key: `partner-${p.id}`,
+      header: (
+        <span>
+          {p.name}{" "}
+          <span className="font-normal normal-case text-muted-foreground">
+            ({p.distribution_percentage}%)
+          </span>
+        </span>
+      ),
+      align: "center" as const,
+      className: "min-w-[130px]",
+      cell: (m: MonthlyHistory) => {
+        const pd = m.partners[p.id]
+        if (!pd) return <span className="text-xs text-muted-foreground">—</span>
+        return (
+          <div className="space-y-0.5">
+            <p className="text-xs tabular-nums">{formatCOP(pd.utilidad)}</p>
+            <p className="text-[10px] tabular-nums text-error">−{formatCOP(pd.retirado)}</p>
+            <p
+              className={`text-xs font-semibold tabular-nums ${pd.disponible >= 0 ? "text-success" : "text-error"}`}
+            >
+              {formatCOP(pd.disponible)}
+            </p>
+          </div>
+        )
+      },
+    }))
+
+    return [...base, ...partnerCols]
+  }, [activePartners])
+
+  if (loadingPartners && loadingWithdrawals && partners.length === 0) {
+    return <PageSkeleton stats={4} rows={6} cols={5} />
+  }
 
   return (
-    <div>
-      <PageHeader title="Socios" description="Distribucion de ganancias entre socios">
-        <Button
-          variant="outline"
-          size="sm"
-          className="border-border text-muted-foreground hover:text-foreground"
-          onClick={() => exportWithdrawalsToExcel(filteredWithdrawals, partners, utilidadMes)}
-          disabled={filteredWithdrawals.length === 0}
-        >
-          <FileSpreadsheet size={16} className="mr-1.5" />
-          Exportar
-        </Button>
-        <Button
-          variant="outline"
-          className="border-gold/30 text-gold hover:bg-gold/5"
-          onClick={() => { setSelectedWithdrawal(null); setShowWithdrawalForm(true) }}
-        >
-          <Banknote size={16} className="mr-1.5" />
-          Registrar retiro
-        </Button>
-        <Button onClick={() => { setSelectedPartner(null); setShowPartnerForm(true) }}>
-          <Plus size={16} className="mr-1.5" />
-          Nuevo socio
-        </Button>
-      </PageHeader>
+    <PageShell
+      title="Socios"
+      description="Distribución de utilidades y retiros entre socios"
+      actions={
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => exportWithdrawalsToExcel(filteredWithdrawals, partners, utilidadMes)}
+            disabled={filteredWithdrawals.length === 0}
+          >
+            <FileSpreadsheet size={16} className="mr-1.5" />
+            Exportar
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-gold/30 text-gold hover:bg-gold/5"
+            onClick={() => openNewWithdrawal()}
+          >
+            <Banknote size={16} className="mr-1.5" />
+            Registrar retiro
+          </Button>
+          <Button size="sm" onClick={openNewPartner}>
+            <Plus size={16} className="mr-1.5" />
+            Nuevo socio
+          </Button>
+        </>
+      }
+    >
+      {/* Selector de período (afecta todos los cálculos del periodo) */}
+      <PeriodSelector
+        selectedPeriod={selectedPeriod}
+        onPeriodChange={setSelectedPeriod}
+        customFrom={customFrom}
+        onCustomFromChange={setCustomFrom}
+        customTo={customTo}
+        onCustomToChange={setCustomTo}
+      />
 
       {/* ═══ Stat Cards ═══ */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
-          label="Utilidad del mes"
+          label="Utilidad del periodo"
           value={utilidadMes}
           icon="TrendingUp"
           borderColor="success"
           delay={0}
         />
         <StatCard
-          label="Retiros del mes"
+          label="Retiros del periodo"
           value={retirosTotalMes}
           icon="Banknote"
           borderColor="error"
@@ -355,150 +707,140 @@ export default function SociosPage() {
         />
       </div>
 
-      {/* ═══ Partner Cards ═══ */}
-      {loadingPartners ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 size={24} className="animate-spin text-gold" />
-        </div>
-      ) : partners.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">
-          {partners.map((p) => {
-            const utilidadProporcional = utilidadMes * (p.distribution_percentage / 100)
-            const retirado = retirosPorSocio[p.id] || 0
-            const disponible = utilidadProporcional - retirado
+      {/* ═══ Tabs ═══ */}
+      <div className="flex w-fit items-center gap-1 rounded-lg bg-cream p-1">
+        <TabButton active={activeTab === "socios"} onClick={() => setActiveTab("socios")} icon={Users}>
+          Socios
+          <span className="ml-1.5 rounded-full bg-muted-foreground/10 px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
+            {partners.length}
+          </span>
+        </TabButton>
+        <TabButton active={activeTab === "retiros"} onClick={() => setActiveTab("retiros")} icon={Receipt}>
+          Retiros
+        </TabButton>
+        <TabButton active={activeTab === "historial"} onClick={() => setActiveTab("historial")} icon={History}>
+          Historial
+        </TabButton>
+      </div>
 
-            return (
-              <Card key={p.id} className={`p-4 space-y-3 ${!p.is_active ? "opacity-60" : ""}`}>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-foreground">{p.name}</h3>
-                  <StatusBadge status={p.is_active ? "active" : "inactive"} />
-                </div>
+      {/* ═══ Tab: Socios ═══ */}
+      {activeTab === "socios" && (
+        <div className="space-y-4">
+          {totalPercentage > 100 && (
+            <div className="flex items-center gap-2 rounded-lg border border-error/20 bg-error-bg p-3 text-sm text-error">
+              <AlertTriangle size={16} />
+              <span>
+                La suma de porcentajes ({totalPercentage}%) supera el 100%. Ajusta la distribución.
+              </span>
+            </div>
+          )}
 
-                {/* Barra de distribución */}
-                <div>
-                  <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                    <span>Distribucion</span>
-                    <span className="font-semibold text-foreground">
-                      {p.distribution_percentage}%
-                    </span>
-                  </div>
-                  <div className="w-full bg-border rounded-full h-2 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gold transition-all duration-500"
-                      style={{ width: `${p.distribution_percentage}%` }}
-                    />
-                  </div>
-                </div>
+          {/* Tarjetas de socio: resumen visual del periodo */}
+          {activePartners.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {activePartners.map((p) => {
+                const utilidadProporcional = utilidadMes * (p.distribution_percentage / 100)
+                const retirado = retirosPorSocio[p.id] || 0
+                const disponible = utilidadProporcional - retirado
+                return (
+                  <Card key={p.id} className="space-y-3 p-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-semibold text-foreground">{p.name}</h3>
+                      <span className="rounded-full bg-gold/10 px-2 py-0.5 text-xs font-semibold text-gold tabular-nums">
+                        {p.distribution_percentage}%
+                      </span>
+                    </div>
 
-                {/* Utilidad / Retirado / Disponible */}
-                <div className="grid grid-cols-3 gap-2 text-center pt-2 border-t border-border">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Utilidad</p>
-                    <p className="text-sm font-semibold tabular-nums">
-                      {formatCOP(utilidadProporcional)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Retirado</p>
-                    <p className="text-sm font-semibold tabular-nums text-error">
-                      {formatCOP(retirado)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Disponible</p>
-                    <p
-                      className={`text-sm font-semibold tabular-nums ${
-                        disponible > 0
-                          ? "text-success"
-                          : disponible < 0
-                            ? "text-error"
-                            : "text-muted-foreground"
-                      }`}
-                    >
-                      {formatCOP(disponible)}
-                    </p>
-                  </div>
-                </div>
+                    <div className="overflow-hidden rounded-full bg-border h-1.5">
+                      <div
+                        className="h-full rounded-full bg-gold transition-all duration-500"
+                        style={{ width: `${Math.min(100, p.distribution_percentage)}%` }}
+                      />
+                    </div>
 
-                {/* Acciones rápidas */}
-                {p.is_active && (
-                  <div className="flex items-center gap-2 pt-2 border-t border-border">
+                    <div className="grid grid-cols-3 gap-2 border-t border-border pt-3 text-center">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Utilidad</p>
+                        <p className="text-sm font-semibold tabular-nums">
+                          {formatCOP(utilidadProporcional)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Retirado</p>
+                        <p className="text-sm font-semibold tabular-nums text-error">
+                          {formatCOP(retirado)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Disponible</p>
+                        <p
+                          className={`text-sm font-semibold tabular-nums ${
+                            disponible > 0
+                              ? "text-success"
+                              : disponible < 0
+                                ? "text-error"
+                                : "text-muted-foreground"
+                          }`}
+                        >
+                          {formatCOP(disponible)}
+                        </p>
+                      </div>
+                    </div>
+
                     <Button
                       variant="outline"
                       size="sm"
-                      className="flex-1 text-xs h-8"
-                      onClick={() => {
-                        setSelectedWithdrawal(null)
-                        setShowWithdrawalForm(true)
-                        // Se usará defaultPartnerId en el dialog
-                        setSelectedPartner(p)
-                      }}
+                      className="h-8 w-full text-xs"
+                      onClick={() => openNewWithdrawal(p)}
                     >
                       <Banknote size={14} className="mr-1" />
                       Registrar retiro
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8"
-                      onClick={() => {
-                        setSelectedPartner(p)
-                        setShowPartnerForm(true)
-                      }}
-                    >
-                      <Pencil size={14} />
-                    </Button>
-                  </div>
-                )}
-              </Card>
-            )
-          })}
-        </div>
-      ) : null}
+                  </Card>
+                )
+              })}
+            </div>
+          )}
 
-      {/* ═══ Tabs ═══ */}
-      <div className="bg-muted p-1 rounded-lg inline-flex gap-1 mb-4">
-        {(["retiros", "socios", "historial"] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
-              activeTab === tab
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {tab === "retiros" ? "Retiros" : tab === "socios" ? "Socios" : "Historial"}
-          </button>
-        ))}
-      </div>
+          {/* Tabla de gestión de socios (incluye inactivos) */}
+          <DataTable
+            data={partners}
+            columns={partnerColumns}
+            rowKey={(p) => p.id}
+            loading={loadingPartners}
+            showFooter
+            empty={{
+              icon: Users,
+              title: "Sin socios",
+              description: "Agrega socios para distribuir las utilidades.",
+              action: (
+                <Button size="sm" onClick={openNewPartner}>
+                  <Plus size={16} className="mr-1.5" />
+                  Nuevo socio
+                </Button>
+              ),
+            }}
+          />
+        </div>
+      )}
 
       {/* ═══ Tab: Retiros ═══ */}
       {activeTab === "retiros" && (
         <div className="space-y-4">
-          {/* Selector de período */}
-          <PeriodSelector
-            selectedPeriod={selectedPeriod}
-            onPeriodChange={setSelectedPeriod}
-            customFrom={customFrom}
-            onCustomFromChange={setCustomFrom}
-            customTo={customTo}
-            onCustomToChange={setCustomTo}
-          />
-
-          {/* Filtros */}
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="relative flex-1">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Buscar por socio o nota..."
-                className="pl-9"
+          <FilterBar
+            search={
+              <SearchInput
                 value={searchWithdrawal}
-                onChange={(e) => setSearchWithdrawal(e.target.value)}
+                onValueChange={setSearchWithdrawal}
+                placeholder="Buscar por socio o nota..."
+                wrapperClassName="max-w-xs"
               />
-            </div>
+            }
+            hasActiveFilters={hasActiveFilters}
+            onClear={clearFilters}
+          >
             <Select value={partnerFilter} onValueChange={setPartnerFilter}>
-              <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectTrigger className="h-9 w-[180px]">
                 <SelectValue placeholder="Socio" />
               </SelectTrigger>
               <SelectContent>
@@ -511,11 +853,11 @@ export default function SociosPage() {
               </SelectContent>
             </Select>
             <Select value={methodFilter} onValueChange={setMethodFilter}>
-              <SelectTrigger className="w-full sm:w-[160px]">
-                <SelectValue placeholder="Metodo" />
+              <SelectTrigger className="h-9 w-[160px]">
+                <SelectValue placeholder="Método" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="all">Todos los métodos</SelectItem>
                 {PAYMENT_METHODS.map((pm) => (
                   <SelectItem key={pm.value} value={pm.value}>
                     {pm.label}
@@ -523,262 +865,52 @@ export default function SociosPage() {
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </FilterBar>
 
-          {loadingWithdrawals ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 size={24} className="animate-spin text-gold" />
-            </div>
-          ) : filteredWithdrawals.length === 0 ? (
-            <EmptyState
-              icon={Banknote}
-              title="Sin retiros"
-              description="No se encontraron retiros en este período."
-            />
-          ) : (
-            <div className="bg-card rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-cream hover:bg-cream">
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Fecha</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Socio</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right">Monto</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Metodo</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Notas</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right">Acciones</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredWithdrawals.map((w) => (
-                    <TableRow key={w.id}>
-                      <TableCell className="text-sm">
-                        {formatDateShort(w.withdrawal_date)}
-                      </TableCell>
-                      <TableCell className="text-sm font-medium">
-                        {w.partner?.name || "—"}
-                      </TableCell>
-                      <TableCell className="text-sm text-right font-semibold text-error tabular-nums">
-                        -{formatCOP(w.amount)}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {PAYMENT_METHODS.find((m) => m.value === w.method)?.label || w.method}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate">
-                        {w.notes || "—"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8"
-                            onClick={() => {
-                              setSelectedWithdrawal(w)
-                              setShowWithdrawalForm(true)
-                            }}
-                          >
-                            <Pencil size={14} />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-error hover:text-error"
-                            onClick={() => {
-                              setSelectedWithdrawal(w)
-                              setShowDeleteWithdrawal(true)
-                            }}
-                          >
-                            <Trash2 size={14} />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-
-              {/* Footer */}
-              <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-cream text-xs text-muted-foreground">
-                <span>{filteredWithdrawals.length} retiro{filteredWithdrawals.length !== 1 ? "s" : ""}</span>
-                <span className="font-semibold text-error tabular-nums">
-                  Total: -{formatCOP(filteredWithdrawalsTotal)}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ═══ Tab: Socios ═══ */}
-      {activeTab === "socios" && (
-        <div className="space-y-4">
-          {totalPercentage > 100 && (
-            <div className="flex items-center gap-2 bg-error-bg border border-error/20 rounded-lg p-3 text-sm text-error">
-              <AlertTriangle size={16} />
-              <span>
-                La suma de porcentajes ({totalPercentage}%) supera el 100%. Ajusta la distribucion.
-              </span>
-            </div>
-          )}
-
-          {loadingPartners ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 size={24} className="animate-spin text-gold" />
-            </div>
-          ) : partners.length === 0 ? (
-            <EmptyState
-              icon={Users}
-              title="Sin socios"
-              description="Agrega socios para distribuir las ganancias."
-            >
-              <Button onClick={() => { setSelectedPartner(null); setShowPartnerForm(true) }}>
-                <Plus size={16} className="mr-1.5" />
-                Nuevo socio
-              </Button>
-            </EmptyState>
-          ) : (
-            <div className="bg-card rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-cream hover:bg-cream">
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Nombre</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">% Distribucion</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground">Estado</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right">Acciones</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {partners.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell className="text-sm font-medium">{p.name}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className="w-20 bg-border rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-gold"
-                              style={{ width: `${p.distribution_percentage}%` }}
-                            />
-                          </div>
-                          <span className="text-sm font-semibold tabular-nums">
-                            {p.distribution_percentage}%
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={p.is_active ? "active" : "inactive"} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setSelectedPartner(p)
-                              setShowPartnerForm(true)
-                            }}
-                          >
-                            <Pencil size={14} className="mr-1" />
-                            Editar
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8 text-error hover:text-error"
-                            onClick={() => {
-                              setSelectedPartner(p)
-                              setShowDeletePartner(true)
-                            }}
-                          >
-                            <Trash2 size={14} />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-
-              {/* Footer */}
-              <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-cream text-xs text-muted-foreground">
-                <span>{partners.length} socio{partners.length !== 1 ? "s" : ""}</span>
-                <span className={`font-semibold tabular-nums ${totalPercentage > 100 ? "text-error" : "text-foreground"}`}>
-                  Suma: {totalPercentage}%
-                </span>
-              </div>
-            </div>
-          )}
+          <DataTable
+            data={filteredWithdrawals}
+            columns={withdrawalColumns}
+            rowKey={(w) => w.id}
+            loading={loadingWithdrawals}
+            isFiltered={hasActiveFilters}
+            pageSize={25}
+            showFooter
+            empty={{
+              icon: Banknote,
+              title: "Sin retiros",
+              description: "No se encontraron retiros en este período.",
+              action: (
+                <Button size="sm" onClick={() => openNewWithdrawal()}>
+                  <Banknote size={16} className="mr-1.5" />
+                  Registrar retiro
+                </Button>
+              ),
+            }}
+          />
         </div>
       )}
 
       {/* ═══ Tab: Historial ═══ */}
       {activeTab === "historial" && (
-        <div className="space-y-4">
-          {loadingHistory ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 size={24} className="animate-spin text-gold" />
-            </div>
-          ) : historyData.length === 0 ? (
-            <EmptyState
-              icon={History}
-              title="Sin datos"
-              description="No hay datos historicos disponibles."
-            />
-          ) : (
-            <div className="bg-card rounded-lg border border-border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-cream hover:bg-cream">
-                    <TableHead className="text-xs font-semibold text-muted-foreground sticky left-0 bg-cream">Mes</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right">Ventas</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right">Gastos</TableHead>
-                    <TableHead className="text-xs font-semibold text-muted-foreground text-right">Utilidad</TableHead>
-                    {partners.filter((p) => p.is_active).map((p) => (
-                      <TableHead key={p.id} className="text-xs font-semibold text-muted-foreground text-center min-w-[140px]">
-                        {p.name} ({p.distribution_percentage}%)
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {historyData.map((month) => (
-                    <TableRow key={month.from}>
-                      <TableCell className="text-sm font-medium capitalize sticky left-0 bg-card">
-                        {month.label}
-                      </TableCell>
-                      <TableCell className="text-sm text-right tabular-nums">
-                        {formatCOP(month.ventas)}
-                      </TableCell>
-                      <TableCell className="text-sm text-right tabular-nums text-error">
-                        {formatCOP(month.gastos)}
-                      </TableCell>
-                      <TableCell className={`text-sm text-right font-semibold tabular-nums ${month.utilidad >= 0 ? "text-success" : "text-error"}`}>
-                        {formatCOP(month.utilidad)}
-                      </TableCell>
-                      {partners.filter((p) => p.is_active).map((p) => {
-                        const pd = month.partners[p.id]
-                        if (!pd) return <TableCell key={p.id} className="text-center text-xs text-muted-foreground">—</TableCell>
-                        return (
-                          <TableCell key={p.id} className="text-center">
-                            <div className="space-y-0.5">
-                              <p className="text-xs tabular-nums">{formatCOP(pd.utilidad)}</p>
-                              <p className="text-[10px] text-error tabular-nums">-{formatCOP(pd.retirado)}</p>
-                              <p className={`text-xs font-semibold tabular-nums ${pd.disponible >= 0 ? "text-success" : "text-error"}`}>
-                                {formatCOP(pd.disponible)}
-                              </p>
-                            </div>
-                          </TableCell>
-                        )
-                      })}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-
-              {/* Leyenda */}
-              <div className="flex items-center gap-4 px-4 py-3 border-t border-border bg-cream text-[10px] text-muted-foreground">
-                <span>Por socio: <span className="text-foreground">Utilidad</span> / <span className="text-error">Retirado</span> / <span className="text-success font-semibold">Disponible</span></span>
-              </div>
-            </div>
+        <div className="space-y-3">
+          <DataTable
+            data={historyData}
+            columns={historyColumns}
+            rowKey={(m) => m.from}
+            loading={loadingHistory}
+            empty={{
+              icon: History,
+              title: "Sin datos",
+              description: "No hay datos históricos disponibles.",
+            }}
+          />
+          {historyData.length > 0 && (
+            <p className="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+              <Wallet size={13} />
+              Por socio: <span className="text-foreground">Utilidad</span> /{" "}
+              <span className="text-error">Retirado</span> /{" "}
+              <span className="font-semibold text-success">Disponible</span>
+            </p>
           )}
         </div>
       )}
@@ -823,6 +955,40 @@ export default function SociosPage() {
         partner={selectedPartner}
         onCompleted={fetchAll}
       />
-    </div>
+    </PageShell>
+  )
+}
+
+function TabButton({
+  active,
+  onClick,
+  icon: Icon,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: typeof Users
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+        active
+          ? "bg-card text-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      <Icon size={15} />
+      {children}
+    </button>
+  )
+}
+
+export default function SociosPage() {
+  return (
+    <Suspense fallback={<PageSkeleton stats={4} rows={6} cols={5} />}>
+      <SociosPageInner />
+    </Suspense>
   )
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useMemo } from "react"
 import { CreditCard, Plus, Loader2, CheckCircle } from "lucide-react"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { MoneyInput } from "@/components/ui/money-input"
 import {
   Select,
   SelectContent,
@@ -22,14 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { DataTable, type Column } from "@/components/shared/data-table"
 import { formatCOP, formatDateShort } from "@/lib/format"
 import { PAYMENT_METHODS } from "@/lib/constants"
 import { registerCashMovement, findAccountForMethod } from "@/lib/cash-movements"
@@ -198,6 +192,47 @@ export function AbonosDialog({ open, onOpenChange, sale, onPaymentRegistered }: 
     }
   }, [accountReceivable, user, paymentAmount, paymentMethod, paymentNotes, sale, supabase, fetchData, onPaymentRegistered])
 
+  // === Columnas del historial de pagos ===
+  const paymentColumns = useMemo<Column<PaymentRecord>[]>(
+    () => [
+      {
+        key: "date",
+        header: "Fecha",
+        sortAccessor: (p) => p.payment_date,
+        cell: (payment) => (
+          <span className="text-muted-foreground">{formatDateShort(payment.payment_date)}</span>
+        ),
+      },
+      {
+        key: "method",
+        header: "Método",
+        cell: (payment) =>
+          PAYMENT_METHODS.find((m) => m.value === payment.payment_method)?.label ||
+          payment.payment_method,
+      },
+      {
+        key: "amount",
+        header: "Monto",
+        align: "right",
+        sortAccessor: (p) => p.amount,
+        cell: (payment) => (
+          <span className="font-semibold text-success">{formatCOP(payment.amount)}</span>
+        ),
+      },
+      {
+        key: "notes",
+        header: "Nota",
+        className: "max-w-[140px]",
+        cell: (payment) => (
+          <span className="block truncate text-xs text-muted-foreground">
+            {payment.notes || "—"}
+          </span>
+        ),
+      },
+    ],
+    []
+  )
+
   if (!sale?.is_credit) return null
 
   const progressPercentage = accountReceivable
@@ -280,36 +315,12 @@ export function AbonosDialog({ open, onOpenChange, sale, onPaymentRegistered }: 
                 <h4 className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground mb-2">
                   Historial de pagos
                 </h4>
-                <div className="bg-card rounded-lg border border-border overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-cream hover:bg-cream">
-                        <TableHead className="text-xs font-semibold text-muted-foreground">Fecha</TableHead>
-                        <TableHead className="text-xs font-semibold text-muted-foreground">Método</TableHead>
-                        <TableHead className="text-xs font-semibold text-muted-foreground text-right">Monto</TableHead>
-                        <TableHead className="text-xs font-semibold text-muted-foreground">Nota</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {payments.map((payment) => (
-                        <TableRow key={payment.id}>
-                          <TableCell className="text-sm">
-                            {formatDateShort(payment.payment_date)}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {PAYMENT_METHODS.find((m) => m.value === payment.payment_method)?.label || payment.payment_method}
-                          </TableCell>
-                          <TableCell className="text-sm text-right font-semibold text-success tabular-nums">
-                            {formatCOP(payment.amount)}
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">
-                            {payment.notes || "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                <DataTable
+                  data={payments}
+                  columns={paymentColumns}
+                  rowKey={(p) => p.id}
+                  density="compact"
+                />
               </div>
             )}
 
@@ -333,20 +344,20 @@ export function AbonosDialog({ open, onOpenChange, sale, onPaymentRegistered }: 
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <Label className="text-xs text-muted-foreground mb-1">
+                        <Label className="text-xs text-muted-foreground mb-1 block">
                           Monto (máx. {formatCOP(accountReceivable.remaining_amount)})
                         </Label>
-                        <Input
-                          type="number"
-                          min={1}
+                        <MoneyInput
+                          value={paymentAmount || null}
+                          onValueChange={(v) => setPaymentAmount(v ?? 0)}
                           max={accountReceivable.remaining_amount}
-                          value={paymentAmount || ""}
-                          onChange={(e) => setPaymentAmount(parseInt(e.target.value) || 0)}
+                          showMaxButton
+                          maxButtonLabel="Saldar"
                           placeholder="0"
                         />
                       </div>
                       <div>
-                        <Label className="text-xs text-muted-foreground mb-1">Método de pago</Label>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Método de pago</Label>
                         <Select value={paymentMethod} onValueChange={setPaymentMethod}>
                           <SelectTrigger className="w-full">
                             <SelectValue />

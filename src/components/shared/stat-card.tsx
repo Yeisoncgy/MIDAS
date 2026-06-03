@@ -44,6 +44,12 @@ interface StatCardProps {
   }
   delay?: number
   variant?: "default" | "bento"
+  /** Hace la tarjeta clicable (ej. para filtrar la tabla por este KPI). */
+  onClick?: () => void
+  /** Marca la tarjeta como filtro activo. */
+  active?: boolean
+  /** Sufijo opcional bajo el valor (ej. "3 cuentas"). */
+  hint?: string
 }
 
 // Colores del borde según estado
@@ -81,6 +87,9 @@ export function StatCard({
   trend,
   delay = 0,
   variant = "default",
+  onClick,
+  active = false,
+  hint,
 }: StatCardProps) {
   const [displayValue, setDisplayValue] = useState(0)
   const [isVisible, setIsVisible] = useState(false)
@@ -131,12 +140,30 @@ export function StatCard({
     }
   }, [format, displayValue])
 
+  const interactive = !!onClick
+
   return (
     <Card
+      onClick={onClick}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onKeyDown={
+        interactive
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                onClick?.()
+              }
+            }
+          : undefined
+      }
+      aria-pressed={interactive ? active : undefined}
       className={cn(
         "relative overflow-hidden transition-all duration-300 hover:shadow-xl hover:-translate-y-1 group bg-card border-border",
         variant === "default" ? "border-l-[3px] p-5" : "border-b-[4px] p-6 rounded-2xl",
         BORDER_COLORS[variant][borderColor],
+        interactive && "cursor-pointer focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        active && "ring-2 ring-gold ring-offset-1 ring-offset-background",
         isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"
       )}
       style={{ transitionDelay: `${delay * 50}ms` }}
@@ -181,6 +208,11 @@ export function StatCard({
         )}>
           {formattedValue}
         </p>
+
+        {/* Sufijo / contexto opcional */}
+        {hint && (
+          <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+        )}
 
         {/* Tendencia comparativa */}
         {trend && (

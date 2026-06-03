@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { MoneyInput } from "@/components/ui/money-input"
 import {
   Select,
   SelectContent,
@@ -56,7 +57,7 @@ export function WithdrawalFormDialog({
   const isEditing = !!withdrawal
 
   const [partnerId, setPartnerId] = useState("")
-  const [amount, setAmount] = useState(0)
+  const [amount, setAmount] = useState<number | null>(null)
   const [method, setMethod] = useState("efectivo")
   const [withdrawalDate, setWithdrawalDate] = useState("")
   const [notes, setNotes] = useState("")
@@ -71,7 +72,14 @@ export function WithdrawalFormDialog({
     ? disponible + withdrawal.amount
     : disponible
 
-  const excedente = amount > 0 && amount > disponibleAjustado ? amount - disponibleAjustado : 0
+  const amountValue = amount ?? 0
+  const excedente =
+    amountValue > 0 && amountValue > disponibleAjustado
+      ? amountValue - disponibleAjustado
+      : 0
+  // Sobre-retiro BLOQUEANTE: no se permite retirar más de lo disponible.
+  const sobreRetiro = excedente > 0
+  const disponibleParaRetiro = Math.max(0, disponibleAjustado)
 
   useEffect(() => {
     if (open) {
@@ -87,7 +95,7 @@ export function WithdrawalFormDialog({
         setPartnerId(
           defaultPartnerId || (activePartners.length === 1 ? activePartners[0].id : "")
         )
-        setAmount(0)
+        setAmount(null)
         setMethod("efectivo")
         setWithdrawalDate(new Date().toISOString().split("T")[0])
         setNotes("")
@@ -104,8 +112,15 @@ export function WithdrawalFormDialog({
       toast.error("Sesión no válida")
       return
     }
-    if (amount <= 0) {
+    if (amountValue <= 0) {
       toast.error("Ingresa un monto válido")
+      return
+    }
+    // Validación BLOQUEANTE de sobre-retiro
+    if (sobreRetiro) {
+      toast.error("El retiro excede la utilidad disponible", {
+        description: `Máximo disponible: ${formatCOP(disponibleParaRetiro)}`,
+      })
       return
     }
 
@@ -120,7 +135,7 @@ export function WithdrawalFormDialog({
           .from("partner_withdrawals")
           .update({
             partner_id: partnerId,
-            amount,
+            amount: amountValue,
             method,
             withdrawal_date: withdrawalDate,
             notes: notes.trim() || null,
@@ -130,7 +145,7 @@ export function WithdrawalFormDialog({
         if (wErr) throw wErr
 
         // Si cambió monto o método, revertir movimiento anterior y crear uno nuevo
-        if (amount !== withdrawal.amount || method !== withdrawal.method) {
+        if (amountValue !== withdrawal.amount || method !== withdrawal.method) {
           // Buscar y eliminar movimiento de caja anterior
           const { data: oldMovements } = await supabase
             .from("cash_bank_movements")
@@ -170,7 +185,7 @@ export function WithdrawalFormDialog({
             await registerCashMovement(supabase, {
               accountId: cashAccountId,
               type: "out",
-              amount,
+              amount: amountValue,
               concept: `Retiro socio: ${partnerName}`,
               referenceType: "partner_withdrawal",
               referenceId: partnerId,
@@ -180,13 +195,13 @@ export function WithdrawalFormDialog({
         }
 
         toast.success("Retiro actualizado", {
-          description: `${formatCOP(amount)} — ${partnerName}`,
+          description: `${formatCOP(amountValue)} — ${partnerName}`,
         })
       } else {
         // ═══ MODO CREACIÓN ═══
         const { error: wErr } = await supabase.from("partner_withdrawals").insert({
           partner_id: partnerId,
-          amount,
+          amount: amountValue,
           method,
           withdrawal_date: withdrawalDate,
           approved_by: user.id,
@@ -201,7 +216,7 @@ export function WithdrawalFormDialog({
           await registerCashMovement(supabase, {
             accountId: cashAccountId,
             type: "out",
-            amount,
+            amount: amountValue,
             concept: `Retiro socio: ${partnerName}`,
             referenceType: "partner_withdrawal",
             referenceId: partnerId,
@@ -209,7 +224,7 @@ export function WithdrawalFormDialog({
           })
         }
 
-        toast.success(`Retiro de ${formatCOP(amount)} registrado`, {
+        toast.success(`Retiro de ${formatCOP(amountValue)} registrado`, {
           description: partnerName,
         })
       }
@@ -267,12 +282,14 @@ export function WithdrawalFormDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-muted-foreground mb-1">Monto *</Label>
-              <Input
-                type="number"
-                min={1}
-                value={amount || ""}
-                onChange={(e) => setAmount(parseInt(e.target.value) || 0)}
+              <MoneyInput
+                value={amount}
+                onValueChange={setAmount}
                 placeholder="0"
+                max={selectedPartner ? disponibleParaRetiro : undefined}
+                showMaxButton={!!selectedPartner && disponibleParaRetiro > 0}
+                maxButtonLabel="Máx"
+                aria-invalid={sobreRetiro}
               />
             </div>
             <div>
@@ -292,13 +309,15 @@ export function WithdrawalFormDialog({
             </div>
           </div>
 
-          {/* Alerta de sobre-retiro */}
-          {excedente > 0 && (
-            <div className="flex items-start gap-2.5 bg-warning-bg border border-warning/20 rounded-lg p-3 text-sm">
-              <AlertTriangle size={16} className="text-warning shrink-0 mt-0.5" />
-              <p className="text-warning">
-                Este retiro excede la utilidad disponible por{" "}
-                <span className="font-semibold">{formatCOP(excedente)}</span>
+          {/* Alerta BLOQUEANTE de sobre-retiro */}
+          {sobreRetiro && (
+            <div className="flex items-start gap-2.5 bg-error-bg border border-error/20 rounded-lg p-3 text-sm">
+              <AlertTriangle size={16} className="text-error shrink-0 mt-0.5" />
+              <p className="text-error">
+                El retiro excede la utilidad disponible por{" "}
+                <span className="font-semibold">{formatCOP(excedente)}</span>. El monto
+                máximo permitido es{" "}
+                <span className="font-semibold">{formatCOP(disponibleParaRetiro)}</span>.
               </p>
             </div>
           )}
@@ -328,12 +347,10 @@ export function WithdrawalFormDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={submitting || amount <= 0 || !partnerId}
-            variant={excedente > 0 ? "outline" : "default"}
-            className={excedente > 0 ? "border-warning text-warning hover:bg-warning/5" : ""}
+            disabled={submitting || amountValue <= 0 || !partnerId || sobreRetiro}
           >
             {submitting && <Loader2 size={16} className="mr-1.5 animate-spin" />}
-            {isEditing ? "Guardar cambios" : `Registrar retiro de ${formatCOP(amount || 0)}`}
+            {isEditing ? "Guardar cambios" : `Registrar retiro de ${formatCOP(amountValue)}`}
           </Button>
         </DialogFooter>
       </DialogContent>

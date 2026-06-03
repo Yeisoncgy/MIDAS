@@ -2,9 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react"
 import {
-  DollarSign,
   ShoppingCart,
-  Search,
   Eye,
   ArrowRightLeft,
   RotateCcw,
@@ -12,17 +10,18 @@ import {
   BarChart3,
   List,
   CreditCard,
-  Package,
 } from "lucide-react"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { PageShell } from "@/components/shared/page-shell"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { PageSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -30,17 +29,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { formatCOP, formatDateShort, getTotalItems } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { SALE_STATUS_CONFIG, SALE_CHANNELS, PAYMENT_METHODS } from "@/lib/constants"
-import { type PeriodKey, PERIODS, toLocalDate, getDateRange } from "@/lib/date-periods"
+import { type PeriodKey, toLocalDate, getDateRange } from "@/lib/date-periods"
 import type { SaleStatus } from "@/lib/types"
 import { PeriodSelector } from "@/components/shared/period-selector"
 import { type SaleExpanded } from "../facturacion/recibo-termico"
@@ -50,40 +42,33 @@ import { ChangeStatusDialog } from "./change-status-dialog"
 import { ProcessReturnDialog } from "./process-return-dialog"
 import { exportSalesToExcel } from "./export-sales"
 
-// === Tabs ===
 type TabKey = "listado" | "analisis"
 
 export default function VentasPage() {
   const supabase = createClient()
 
-  // === Estado principal ===
   const [sales, setSales] = useState<SaleExpanded[]>([])
   const [loading, setLoading] = useState(true)
 
-  // === Periodo ===
   const [period, setPeriod] = useState<PeriodKey>("month")
   const [customFrom, setCustomFrom] = useState("")
   const [customTo, setCustomTo] = useState("")
 
-  // === Filtros ===
   const [search, setSearch] = useState("")
+  const debouncedSearch = useDebounce(search, 250)
   const [statusFilter, setStatusFilter] = useState("all")
   const [channelFilter, setChannelFilter] = useState("all")
   const [paymentFilter, setPaymentFilter] = useState("all")
 
-  // === Tab ===
   const [activeTab, setActiveTab] = useState<TabKey>("listado")
 
-  // === Drawers y diálogos ===
   const [showDetail, setShowDetail] = useState(false)
   const [showChangeStatus, setShowChangeStatus] = useState(false)
   const [showReturn, setShowReturn] = useState(false)
   const [selectedSale, setSelectedSale] = useState<SaleExpanded | null>(null)
 
-  // === Crédito pendiente ===
   const [creditPending, setCreditPending] = useState(0)
 
-  // === Cargar ventas ===
   const fetchSales = useCallback(async () => {
     setLoading(true)
 
@@ -91,9 +76,7 @@ export default function VentasPage() {
     let dateTo: string
 
     if (period === "custom") {
-      // sale_date es tipo DATE en Supabase, usar YYYY-MM-DD directo
       dateFrom = customFrom || ""
-      // Para "hasta", usar el día siguiente para incluir todo el día final
       if (customTo) {
         const nextDay = new Date(customTo + "T00:00:00")
         nextDay.setDate(nextDay.getDate() + 1)
@@ -122,12 +105,8 @@ export default function VentasPage() {
       `)
       .order("created_at", { ascending: false })
 
-    if (dateFrom) {
-      query = query.gte("sale_date", dateFrom)
-    }
-    if (dateTo) {
-      query = query.lt("sale_date", dateTo)
-    }
+    if (dateFrom) query = query.gte("sale_date", dateFrom)
+    if (dateTo) query = query.lt("sale_date", dateTo)
 
     const { data, error } = await query
 
@@ -135,12 +114,12 @@ export default function VentasPage() {
       setSales(data as unknown as SaleExpanded[])
     } else {
       console.error("Error al cargar ventas:", error)
+      toast.error("No se pudieron cargar las ventas")
     }
 
     setLoading(false)
   }, [supabase, period, customFrom, customTo])
 
-  // Cargar crédito pendiente total
   const fetchCreditPending = useCallback(async () => {
     const { data } = await supabase
       .from("accounts_receivable")
@@ -158,7 +137,6 @@ export default function VentasPage() {
     fetchCreditPending()
   }, [fetchSales, fetchCreditPending])
 
-  // === Estadísticas ===
   const stats = useMemo(() => {
     const activeSales = sales.filter((s) => s.status !== "returned")
     const returnedSales = sales.filter((s) => s.status === "returned")
@@ -175,12 +153,11 @@ export default function VentasPage() {
     return { totalVendido, cantidadVentas, ticketPromedio, unidadesVendidas, devoluciones }
   }, [sales])
 
-  // === Filtrado ===
   const filteredSales = useMemo(() => {
     return sales.filter((sale) => {
-      const searchLower = search.toLowerCase()
+      const searchLower = debouncedSearch.toLowerCase()
       const matchesSearch =
-        !search ||
+        !debouncedSearch ||
         sale.invoice_number?.toLowerCase().includes(searchLower) ||
         sale.client?.full_name?.toLowerCase().includes(searchLower)
 
@@ -190,9 +167,18 @@ export default function VentasPage() {
 
       return matchesSearch && matchesStatus && matchesChannel && matchesPayment
     })
-  }, [sales, search, statusFilter, channelFilter, paymentFilter])
+  }, [sales, debouncedSearch, statusFilter, channelFilter, paymentFilter])
 
-  // === Handlers ===
+  const hasActiveFilters =
+    !!search || statusFilter !== "all" || channelFilter !== "all" || paymentFilter !== "all"
+
+  const clearFilters = () => {
+    setSearch("")
+    setStatusFilter("all")
+    setChannelFilter("all")
+    setPaymentFilter("all")
+  }
+
   const handleViewDetail = (sale: SaleExpanded) => {
     setSelectedSale(sale)
     setShowDetail(true)
@@ -213,35 +199,139 @@ export default function VentasPage() {
     fetchCreditPending()
   }
 
-  // === Loading skeleton ===
+  // === Columnas de la tabla ===
+  const columns = useMemo<Column<SaleExpanded>[]>(
+    () => [
+      {
+        key: "invoice",
+        header: "# Factura",
+        sortAccessor: (s) => s.invoice_number ?? "",
+        cell: (sale) => (
+          <span className="flex items-center gap-1.5 font-semibold text-gold">
+            {sale.invoice_number}
+            {sale.is_credit && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <CreditCard size={13} className="text-warning" />
+                </TooltipTrigger>
+                <TooltipContent>Venta a crédito</TooltipContent>
+              </Tooltip>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: "date",
+        header: "Fecha",
+        sortAccessor: (s) => s.sale_date || s.created_at,
+        cell: (sale) => (
+          <span className="text-muted-foreground">
+            {formatDateShort(sale.sale_date || sale.created_at)}
+          </span>
+        ),
+      },
+      {
+        key: "client",
+        header: "Cliente",
+        sortAccessor: (s) => s.client?.full_name ?? "",
+        cell: (sale) => sale.client?.full_name || "—",
+      },
+      {
+        key: "channel",
+        header: "Canal",
+        className: "hidden md:table-cell text-muted-foreground",
+        cell: (sale) =>
+          SALE_CHANNELS.find((c) => c.value === sale.sale_channel)?.label ||
+          sale.sale_channel,
+      },
+      {
+        key: "items",
+        header: "Items",
+        align: "center",
+        cell: (sale) => getTotalItems(sale.items),
+      },
+      {
+        key: "total",
+        header: "Total",
+        align: "right",
+        sortAccessor: (s) => s.total,
+        cell: (sale) => (
+          <span className="font-semibold text-gold">{formatCOP(sale.total)}</span>
+        ),
+        footer: formatCOP(filteredSales.reduce((sum, s) => sum + s.total, 0)),
+      },
+      {
+        key: "payment",
+        header: "M. Pago",
+        className: "hidden lg:table-cell text-muted-foreground",
+        cell: (sale) =>
+          PAYMENT_METHODS.find((m) => m.value === sale.payment_method)?.label ||
+          sale.payment_method,
+      },
+      {
+        key: "status",
+        header: "Estado",
+        align: "center",
+        cell: (sale) => <StatusBadge status={sale.status} />,
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (sale) => (
+          <div
+            className="flex items-center justify-end gap-0.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => handleViewDetail(sale)}>
+                  <Eye size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Ver detalle</TooltipContent>
+            </Tooltip>
+            {sale.status !== "returned" && sale.status !== "delivered" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-xs" onClick={() => handleChangeStatus(sale)}>
+                    <ArrowRightLeft size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Cambiar estado</TooltipContent>
+              </Tooltip>
+            )}
+            {sale.status !== "returned" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-error hover:text-error"
+                    onClick={() => handleProcessReturn(sale)}
+                  >
+                    <RotateCcw size={15} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Procesar devolución</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        ),
+      },
+    ],
+    [filteredSales]
+  )
+
   if (loading) {
-    return (
-      <div className="space-y-6">
-        <Skeleton className="h-10 w-56 skeleton-shimmer" />
-        <div className="flex gap-2">
-          {[...Array(5)].map((_, i) => (
-            <Skeleton key={i} className="h-9 w-24 rounded-lg skeleton-shimmer" />
-          ))}
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[...Array(6)].map((_, i) => (
-            <Skeleton key={i} className="h-[100px] rounded-xl skeleton-shimmer" />
-          ))}
-        </div>
-        <div className="flex gap-3">
-          <Skeleton className="h-9 w-64 skeleton-shimmer" />
-          <Skeleton className="h-9 w-40 skeleton-shimmer" />
-          <Skeleton className="h-9 w-40 skeleton-shimmer" />
-        </div>
-        <Skeleton className="h-96 rounded-xl skeleton-shimmer" />
-      </div>
-    )
+    return <PageSkeleton stats={6} rows={8} cols={7} />
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <PageHeader title="Ventas" description="Gestión y análisis de ventas">
+    <PageShell
+      title="Ventas"
+      description="Gestión y análisis de ventas"
+      actions={
         <Button
           variant="outline"
           onClick={async () => {
@@ -257,8 +347,8 @@ export default function VentasPage() {
           <Download size={16} className="mr-1.5" />
           Descargar reporte
         </Button>
-      </PageHeader>
-
+      }
+    >
       {/* Selector de periodo */}
       <PeriodSelector
         selectedPeriod={period}
@@ -269,8 +359,8 @@ export default function VentasPage() {
         onCustomToChange={setCustomTo}
       />
 
-      {/* Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* Stat Cards — clicables para filtrar */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard
           label="Total vendido"
           value={stats.totalVendido}
@@ -310,6 +400,10 @@ export default function VentasPage() {
           format="number"
           borderColor="error"
           delay={4}
+          active={statusFilter === "returned"}
+          onClick={() =>
+            setStatusFilter((s) => (s === "returned" ? "all" : "returned"))
+          }
         />
         <StatCard
           label="Crédito pendiente"
@@ -322,10 +416,10 @@ export default function VentasPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 bg-cream rounded-lg p-1 w-fit">
+      <div className="flex w-fit items-center gap-1 rounded-lg bg-cream p-1">
         <button
           onClick={() => setActiveTab("listado")}
-          className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === "listado"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
@@ -336,7 +430,7 @@ export default function VentasPage() {
         </button>
         <button
           onClick={() => setActiveTab("analisis")}
-          className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+          className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
             activeTab === "analisis"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
@@ -347,26 +441,22 @@ export default function VentasPage() {
         </button>
       </div>
 
-      {/* Tab: Análisis */}
       {activeTab === "analisis" && <SalesCharts sales={sales} />}
 
-      {/* Tab: Listado */}
       {activeTab === "listado" && (
-        <>
-          {/* Filtros */}
-          <div className="flex flex-col sm:flex-row flex-wrap gap-3">
-            <div className="relative flex-1 min-w-[200px] max-w-sm">
-              <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                placeholder="Buscar factura o cliente..."
+        <div className="space-y-4">
+          <FilterBar
+            search={
+              <SearchInput
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
+                onValueChange={setSearch}
+                placeholder="Buscar factura o cliente..."
+                wrapperClassName="max-w-sm"
               />
-            </div>
+            }
+            hasActiveFilters={hasActiveFilters}
+            onClear={clearFilters}
+          >
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-44">
                 <SelectValue placeholder="Estado" />
@@ -406,162 +496,26 @@ export default function VentasPage() {
                 ))}
               </SelectContent>
             </Select>
+          </FilterBar>
 
-          </div>
-
-          {/* Tabla o estado vacío */}
-          {filteredSales.length === 0 ? (
-            <EmptyState
-              icon={ShoppingCart}
-              title="Sin ventas"
-              description={
-                sales.length === 0
-                  ? "No hay ventas registradas en el periodo seleccionado."
-                  : "No se encontraron ventas con los filtros aplicados."
-              }
-            />
-          ) : (
-            <div className="bg-card rounded-xl border border-border overflow-hidden shadow-card">
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-cream hover:bg-cream">
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                        # Factura
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                        Fecha
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground">
-                        Cliente
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground hidden md:table-cell">
-                        Canal
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-center">
-                        Items
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right">
-                        Total
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground hidden lg:table-cell">
-                        M. Pago
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-center">
-                        Estado
-                      </TableHead>
-                      <TableHead className="text-xs uppercase tracking-[0.05em] font-semibold text-muted-foreground text-right">
-                        Acciones
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredSales.map((sale) => {
-                      const channelLabel =
-                        SALE_CHANNELS.find((c) => c.value === sale.sale_channel)?.label ||
-                        sale.sale_channel
-                      const paymentLabel =
-                        PAYMENT_METHODS.find((m) => m.value === sale.payment_method)?.label ||
-                        sale.payment_method
-
-                      return (
-                        <TableRow
-                          key={sale.id}
-                          className="hover:bg-cream-dark/50 transition-colors cursor-pointer"
-                          onClick={() => handleViewDetail(sale)}
-                        >
-                          <TableCell className="font-semibold text-sm text-gold">
-                            <span className="flex items-center gap-1.5">
-                              {sale.invoice_number}
-                              {sale.is_credit && (
-                                <span title="Crédito">
-                                  <CreditCard size={13} className="text-warning" />
-                                </span>
-                              )}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {formatDateShort(sale.sale_date || sale.created_at)}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {sale.client?.full_name || "—"}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground hidden md:table-cell">
-                            {channelLabel}
-                          </TableCell>
-                          <TableCell className="text-sm text-center tabular-nums">
-                            {getTotalItems(sale.items)}
-                          </TableCell>
-                          <TableCell className="text-sm text-right font-semibold text-gold tabular-nums">
-                            {formatCOP(sale.total)}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground hidden lg:table-cell">
-                            {paymentLabel}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <StatusBadge status={sale.status} />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div
-                              className="flex items-center justify-end gap-1"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                title="Ver detalle"
-                                onClick={() => handleViewDetail(sale)}
-                              >
-                                <Eye size={14} />
-                              </Button>
-                              {sale.status !== "returned" && sale.status !== "delivered" && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  title="Cambiar estado"
-                                  onClick={() => handleChangeStatus(sale)}
-                                >
-                                  <ArrowRightLeft size={14} />
-                                </Button>
-                              )}
-                              {sale.status !== "returned" && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  title="Devolución"
-                                  className="text-error hover:text-error"
-                                  onClick={() => handleProcessReturn(sale)}
-                                >
-                                  <RotateCcw size={14} />
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {/* Pie de tabla */}
-              <div className="px-4 py-3 bg-cream border-t border-border flex justify-between text-sm">
-                <span className="text-muted-foreground">
-                  {filteredSales.length} venta{filteredSales.length !== 1 ? "s" : ""}
-                </span>
-                <span className="font-semibold text-gold tabular-nums">
-                  {formatCOP(filteredSales.reduce((sum, s) => sum + s.total, 0))}
-                </span>
-              </div>
-            </div>
-          )}
-        </>
+          <DataTable
+            data={filteredSales}
+            columns={columns}
+            rowKey={(s) => s.id}
+            onRowClick={handleViewDetail}
+            isFiltered={hasActiveFilters}
+            pageSize={25}
+            showFooter
+            empty={{
+              icon: ShoppingCart,
+              title: "Sin ventas",
+              description: "No hay ventas registradas en el periodo seleccionado.",
+            }}
+          />
+        </div>
       )}
 
-      {/* ============================================================ */}
-      {/* DRAWERS Y DIÁLOGOS                                          */}
-      {/* ============================================================ */}
-
+      {/* Drawers y diálogos */}
       <SaleDetailDrawer
         open={showDetail}
         onOpenChange={(isOpen) => {
@@ -599,6 +553,6 @@ export default function VentasPage() {
         sale={selectedSale}
         onReturnProcessed={handleSaleUpdated}
       />
-    </div>
+    </PageShell>
   )
 }

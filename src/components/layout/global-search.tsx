@@ -20,7 +20,6 @@ import {
   Truck,
   BookOpen,
   UserPlus,
-  Plus,
   Clock,
   X,
   type LucideIcon,
@@ -35,7 +34,26 @@ import {
   CommandSeparator,
 } from "@/components/ui/command"
 import { useGlobalSearch } from "@/hooks/use-global-search"
+import { useAuth } from "@/components/providers/auth-provider"
 import { formatCOP } from "@/lib/format"
+import type { ModuleName } from "@/lib/types"
+
+// Acciones rápidas: navegan al módulo con intent ?nuevo=1 para auto-abrir el form
+interface QuickAction {
+  label: string
+  href: string
+  icon: LucideIcon
+  color: string
+  module: ModuleName
+}
+
+const QUICK_ACTIONS: QuickAction[] = [
+  { label: "Nueva factura", href: "/facturacion?nuevo=1", icon: Receipt, color: "text-gold", module: "facturacion" },
+  { label: "Registrar gasto", href: "/gastos?nuevo=1", icon: TrendingDown, color: "text-error", module: "gastos" },
+  { label: "Movimiento de caja", href: "/caja?nuevo=1", icon: Landmark, color: "text-success", module: "caja" },
+  { label: "Nuevo cliente", href: "/clientes?nuevo=1", icon: UserPlus, color: "text-info", module: "clientes" },
+  { label: "Entrada de inventario", href: "/inventario?nuevo=1", icon: Package, color: "text-success", module: "inventario" },
+]
 
 // Mapa de iconos string → componente (mismo patrón que sidebar)
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -64,6 +82,7 @@ interface GlobalSearchProps {
 
 export function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) {
   const router = useRouter()
+  const { hasPermission } = useAuth()
   const {
     query,
     setQuery,
@@ -76,6 +95,9 @@ export function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) {
     addRecentSearch,
     clearRecentSearches,
   } = useGlobalSearch()
+
+  // Acciones rápidas que el usuario tiene permiso de ejecutar
+  const quickActions = QUICK_ACTIONS.filter((a) => hasPermission(a.module))
 
   // Reset query cuando se cierra
   useEffect(() => {
@@ -122,20 +144,22 @@ export function GlobalSearch({ open, onOpenChange }: GlobalSearchProps) {
         {/* ===== Estado vacío: acciones rápidas + recientes ===== */}
         {!hasQuery && (
           <>
-            <CommandGroup heading="Acciones rápidas">
-              <CommandItem onSelect={() => handleSelect("/facturacion")}>
-                <Plus size={16} className="text-gold" />
-                <span>Nueva factura</span>
-              </CommandItem>
-              <CommandItem onSelect={() => handleSelect("/clientes")}>
-                <UserPlus size={16} className="text-info" />
-                <span>Nuevo cliente</span>
-              </CommandItem>
-              <CommandItem onSelect={() => handleSelect("/inventario")}>
-                <Package size={16} className="text-success" />
-                <span>Ver inventario</span>
-              </CommandItem>
-            </CommandGroup>
+            {quickActions.length > 0 && (
+              <CommandGroup heading="Acciones rápidas">
+                {quickActions.map((action) => {
+                  const Icon = action.icon
+                  return (
+                    <CommandItem
+                      key={action.href}
+                      onSelect={() => handleSelect(action.href)}
+                    >
+                      <Icon size={16} className={action.color} />
+                      <span>{action.label}</span>
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            )}
 
             {recentSearches.length > 0 && (
               <>

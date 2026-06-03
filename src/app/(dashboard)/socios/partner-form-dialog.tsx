@@ -48,7 +48,7 @@ export function PartnerFormDialog({
 
   const [name, setName] = useState("")
   const [userId, setUserId] = useState<string>("none")
-  const [percentage, setPercentage] = useState(0)
+  const [percentage, setPercentage] = useState<number | null>(null)
   const [isActive, setIsActive] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
@@ -97,7 +97,7 @@ export function PartnerFormDialog({
       } else {
         setName("")
         setUserId("none")
-        setPercentage(0)
+        setPercentage(null)
         setIsActive(true)
       }
       fetchFormData()
@@ -105,17 +105,19 @@ export function PartnerFormDialog({
   }, [open, partner, fetchFormData])
 
   const maxPercentage = 100 - existingSum
+  const percentageValue = percentage ?? 0
+  const overMax = percentageValue > maxPercentage
 
   const handleSubmit = async () => {
     if (!name.trim()) {
       toast.error("El nombre es obligatorio")
       return
     }
-    if (percentage <= 0 || percentage > 100) {
+    if (percentageValue <= 0 || percentageValue > 100) {
       toast.error("El porcentaje debe estar entre 1 y 100")
       return
     }
-    if (percentage > maxPercentage) {
+    if (percentageValue > maxPercentage) {
       toast.error(
         `El porcentaje máximo disponible es ${maxPercentage}%. La suma total no puede superar 100%.`
       )
@@ -128,7 +130,7 @@ export function PartnerFormDialog({
       const payload = {
         name: name.trim(),
         user_id: userId === "none" ? null : userId,
-        distribution_percentage: percentage,
+        distribution_percentage: percentageValue,
         is_active: isActive,
       }
 
@@ -196,19 +198,33 @@ export function PartnerFormDialog({
             <Label className="text-xs text-muted-foreground mb-1">
               % Distribución (disponible: {maxPercentage}%)
             </Label>
-            <Input
-              type="number"
-              min={1}
-              max={maxPercentage}
-              value={percentage || ""}
-              onChange={(e) => setPercentage(parseInt(e.target.value) || 0)}
-              placeholder="0"
-            />
-            {existingSum > 0 && (
+            <div className="relative">
+              <Input
+                type="number"
+                min={1}
+                max={maxPercentage}
+                value={percentage ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setPercentage(v === "" ? null : Math.max(0, Math.min(100, parseInt(v) || 0)))
+                }}
+                placeholder="0"
+                aria-invalid={overMax}
+                className="pr-8 tabular-nums"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                %
+              </span>
+            </div>
+            {overMax ? (
+              <p className="text-xs text-error mt-1">
+                Supera el máximo disponible ({maxPercentage}%). La suma total no puede pasar de 100%.
+              </p>
+            ) : existingSum > 0 ? (
               <p className="text-xs text-muted-foreground mt-1">
                 Otros socios suman {existingSum}% — queda {maxPercentage}% disponible
               </p>
-            )}
+            ) : null}
           </div>
 
           {isEditing && (
@@ -228,7 +244,10 @@ export function PartnerFormDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancelar
           </Button>
-          <Button onClick={handleSubmit} disabled={submitting}>
+          <Button
+            onClick={handleSubmit}
+            disabled={submitting || !name.trim() || percentageValue <= 0 || overMax}
+          >
             {submitting && <Loader2 size={16} className="mr-1.5 animate-spin" />}
             {isEditing ? "Guardar cambios" : "Crear socio"}
           </Button>

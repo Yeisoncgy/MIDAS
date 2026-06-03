@@ -1,20 +1,18 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
-import {
-  Plus,
-  Search,
-  Wrench,
-  Pencil,
-  Loader2,
-} from "lucide-react"
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react"
+import { useSearchParams } from "next/navigation"
+import { Plus, Wrench, Pencil, CalendarClock, AlertTriangle } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
-import { PageHeader } from "@/components/shared/page-header"
 import { StatCard } from "@/components/shared/stat-card"
-import { EmptyState } from "@/components/shared/empty-state"
 import { StatusBadge } from "@/components/shared/status-badge"
+import { PageShell } from "@/components/shared/page-shell"
+import { DataTable, type Column } from "@/components/shared/data-table"
+import { FilterBar } from "@/components/shared/filter-bar"
+import { SearchInput } from "@/components/shared/search-input"
+import { PageSkeleton } from "@/components/shared/skeletons"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -22,15 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { cn } from "@/lib/utils"
 import { formatCOP, formatDateShort } from "@/lib/format"
+import { useDebounce } from "@/hooks/use-debounce"
 import { SubscriptionFormDialog } from "./subscription-form-dialog"
 import type { Subscription } from "@/lib/types"
 
@@ -39,13 +31,48 @@ const CYCLE_LABELS: Record<string, string> = {
   annual: "Anual",
 }
 
-export default function HerramientasPage() {
+/** Umbral (en días) para considerar una renovación "próxima". */
+const SOON_THRESHOLD_DAYS = 7
+
+/**
+ * Días que faltan para la renovación (negativo = ya venció).
+ * Parsea la fecha como medianoche LOCAL (evita el desfase de un día que
+ * provoca `new Date("2026-06-15")`, que se interpreta en UTC).
+ */
+function daysUntil(dateStr: string): number {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const [y, m, d] = dateStr.split("T")[0].split("-").map(Number)
+  const target = new Date(y, (m || 1) - 1, d || 1)
+
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000)
+}
+
+type Urgency = "overdue" | "soon" | "upcoming" | "none"
+
+/** Clasifica la urgencia de una renovación según los días restantes. */
+function renewalUrgency(sub: Subscription): { urgency: Urgency; days: number } {
+  const days = daysUntil(sub.next_renewal_date)
+  // Solo las suscripciones activas requieren atención.
+  if (sub.status !== "active") return { urgency: "none", days }
+  if (days < 0) return { urgency: "overdue", days }
+  if (days <= SOON_THRESHOLD_DAYS) return { urgency: "soon", days }
+  if (days <= 30) return { urgency: "upcoming", days }
+  return { urgency: "none", days }
+}
+
+function HerramientasPageInner() {
   const supabase = createClient()
+  const params = useSearchParams()
 
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  const debouncedSearch = useDebounce(search, 250)
   const [statusFilter, setStatusFilter] = useState("all")
+  const [cycleFilter, setCycleFilter] = useState("all")
+  const [renewalFilter, setRenewalFilter] = useState<"all" | "soon">("all")
   const [showForm, setShowForm] = useState(false)
   const [selectedSub, setSelectedSub] = useState<Subscription | null>(null)
 
@@ -64,200 +91,343 @@ export default function HerramientasPage() {
     fetchSubscriptions()
   }, [fetchSubscriptions])
 
-  // Stats
-  const activeSubs = subscriptions.filter((s) => s.status === "active")
-  const pausedSubs = subscriptions.filter((s) => s.status === "paused")
-  const totalMensual = activeSubs.reduce((s, sub) => s + sub.monthly_cost, 0)
-  const gastoAnual = totalMensual * 12
+  // === Stats ===
+  const stats = useMemo(() => {
+    const activeSubs = subscriptions.filter((s) => s.status === "active")
+    const pausedSubs = subscriptions.filter((s) => s.status === "paused")
+    const totalMensual = activeSubs.reduce((s, sub) => s + sub.monthly_cost, 0)
+    const gastoAnual = totalMensual * 12
+    const renovacionesProximas = activeSubs.filter((s) => {
+      const { urgency } = renewalUrgency(s)
+      return urgency === "soon" || urgency === "overdue"
+    }).length
 
-  // Filtrado
+    return {
+      activeCount: activeSubs.length,
+      pausedCount: pausedSubs.length,
+      totalMensual,
+      gastoAnual,
+      renovacionesProximas,
+    }
+  }, [subscriptions])
+
+  // === Filtrado ===
   const filtered = useMemo(() => {
     return subscriptions.filter((s) => {
-      const q = search.toLowerCase()
+      const q = debouncedSearch.toLowerCase()
       const matchesSearch =
+        !q ||
         s.tool_name.toLowerCase().includes(q) ||
         (s.category || "").toLowerCase().includes(q)
 
-      const matchesStatus =
-        statusFilter === "all" || s.status === statusFilter
+      const matchesStatus = statusFilter === "all" || s.status === statusFilter
+      const matchesCycle = cycleFilter === "all" || s.billing_cycle === cycleFilter
 
-      return matchesSearch && matchesStatus
+      const matchesRenewal =
+        renewalFilter === "all" ||
+        (() => {
+          const { urgency } = renewalUrgency(s)
+          return urgency === "soon" || urgency === "overdue"
+        })()
+
+      return matchesSearch && matchesStatus && matchesCycle && matchesRenewal
     })
-  }, [subscriptions, search, statusFilter])
+  }, [subscriptions, debouncedSearch, statusFilter, cycleFilter, renewalFilter])
 
-  const filteredTotal = filtered
+  const filteredMonthlyTotal = filtered
     .filter((s) => s.status === "active")
     .reduce((s, sub) => s + sub.monthly_cost, 0)
 
-  const openCreate = () => {
+  const hasActiveFilters =
+    !!search ||
+    statusFilter !== "all" ||
+    cycleFilter !== "all" ||
+    renewalFilter !== "all"
+
+  const clearFilters = () => {
+    setSearch("")
+    setStatusFilter("all")
+    setCycleFilter("all")
+    setRenewalFilter("all")
+  }
+
+  const openCreate = useCallback(() => {
     setSelectedSub(null)
     setShowForm(true)
-  }
+  }, [])
 
   const openEdit = (s: Subscription) => {
     setSelectedSub(s)
     setShowForm(true)
   }
 
+  // Soporte para intent de creación (?nuevo=1 desde el command palette)
+  useEffect(() => {
+    if (params.get("nuevo") === "1") openCreate()
+  }, [params, openCreate])
+
+  // === Columnas de la tabla ===
+  const columns = useMemo<Column<Subscription>[]>(
+    () => [
+      {
+        key: "tool_name",
+        header: "Herramienta",
+        sortAccessor: (s) => s.tool_name,
+        cell: (sub) => (
+          <div>
+            <p className="text-sm font-medium text-foreground">{sub.tool_name}</p>
+            <p className="text-xs text-muted-foreground md:hidden">
+              {sub.category || "—"}
+            </p>
+          </div>
+        ),
+      },
+      {
+        key: "category",
+        header: "Categoría",
+        className: "hidden md:table-cell text-muted-foreground",
+        sortAccessor: (s) => s.category ?? "",
+        cell: (sub) => sub.category || "—",
+      },
+      {
+        key: "monthly_cost",
+        header: "Costo mensual",
+        align: "right",
+        sortAccessor: (s) => s.monthly_cost,
+        cell: (sub) => (
+          <span className="font-semibold text-gold">{formatCOP(sub.monthly_cost)}</span>
+        ),
+        footer: formatCOP(filteredMonthlyTotal),
+      },
+      {
+        key: "billing_cycle",
+        header: "Ciclo",
+        className: "hidden sm:table-cell text-muted-foreground",
+        cell: (sub) => CYCLE_LABELS[sub.billing_cycle] || sub.billing_cycle,
+      },
+      {
+        key: "next_renewal_date",
+        header: "Próxima renovación",
+        sortAccessor: (s) => s.next_renewal_date,
+        cell: (sub) => {
+          const { urgency, days } = renewalUrgency(sub)
+          const date = (
+            <span className="tabular-nums">
+              {formatDateShort(sub.next_renewal_date)}
+            </span>
+          )
+
+          if (urgency === "overdue") {
+            return (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-1.5 font-medium text-error">
+                    <AlertTriangle size={13} />
+                    {date}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Renovación vencida hace {Math.abs(days)} día
+                  {Math.abs(days) !== 1 ? "s" : ""}
+                </TooltipContent>
+              </Tooltip>
+            )
+          }
+
+          if (urgency === "soon") {
+            return (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-1.5 font-medium text-warning">
+                    <CalendarClock size={13} />
+                    {date}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {days === 0
+                    ? "Renueva hoy"
+                    : `Renueva en ${days} día${days !== 1 ? "s" : ""}`}
+                </TooltipContent>
+              </Tooltip>
+            )
+          }
+
+          return (
+            <span
+              className={cn(
+                urgency === "upcoming" ? "text-foreground" : "text-muted-foreground"
+              )}
+            >
+              {date}
+            </span>
+          )
+        },
+      },
+      {
+        key: "status",
+        header: "Estado",
+        align: "center",
+        cell: (sub) => (
+          <StatusBadge
+            status={sub.status as "active" | "paused" | "cancelled"}
+          />
+        ),
+      },
+      {
+        key: "actions",
+        header: "",
+        align: "right",
+        cell: (sub) => (
+          <div
+            className="flex items-center justify-end"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" onClick={() => openEdit(sub)}>
+                  <Pencil size={15} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Editar suscripción</TooltipContent>
+            </Tooltip>
+          </div>
+        ),
+      },
+    ],
+    [filteredMonthlyTotal]
+  )
+
+  if (loading) {
+    return <PageSkeleton stats={4} rows={8} cols={7} />
+  }
+
   return (
-    <div>
-      <PageHeader title="Herramientas" description="Suscripciones y herramientas del negocio">
+    <PageShell
+      title="Herramientas"
+      description="Suscripciones y herramientas del negocio"
+      actions={
         <Button onClick={openCreate}>
           <Plus size={16} className="mr-1.5" />
-          Nueva suscripcion
+          Nueva suscripción
         </Button>
-      </PageHeader>
-
+      }
+    >
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label="Costo mensual"
-          value={totalMensual}
+          value={stats.totalMensual}
           icon="DollarSign"
+          format="currency"
           borderColor="gold"
+          hint={`${stats.activeCount} activa${stats.activeCount !== 1 ? "s" : ""}`}
           delay={0}
         />
         <StatCard
-          label="Activas"
-          value={activeSubs.length}
-          icon="TrendingUp"
-          format="number"
-          borderColor="success"
+          label="Gasto anual estimado"
+          value={stats.gastoAnual}
+          icon="Banknote"
+          format="currency"
+          borderColor="info"
           delay={1}
         />
         <StatCard
-          label="Pausadas"
-          value={pausedSubs.length}
-          icon="Package"
+          label="Renovaciones próximas"
+          value={stats.renovacionesProximas}
+          icon="TrendingDown"
           format="number"
           borderColor="warning"
+          hint={`Próximos ${SOON_THRESHOLD_DAYS} días`}
+          active={renewalFilter === "soon"}
+          onClick={() =>
+            setRenewalFilter((r) => (r === "soon" ? "all" : "soon"))
+          }
           delay={2}
         />
         <StatCard
-          label="Gasto anual estimado"
-          value={gastoAnual}
-          icon="Banknote"
-          borderColor="info"
+          label="Pausadas"
+          value={stats.pausedCount}
+          icon="Package"
+          format="number"
+          borderColor="warning"
+          active={statusFilter === "paused"}
+          onClick={() =>
+            setStatusFilter((s) => (s === "paused" ? "all" : "paused"))
+          }
           delay={3}
         />
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-4">
-        <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre o categoria..."
-            className="pl-9"
+      <FilterBar
+        search={
+          <SearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onValueChange={setSearch}
+            placeholder="Buscar por nombre o categoría..."
+            wrapperClassName="max-w-sm"
           />
-        </div>
+        }
+        hasActiveFilters={hasActiveFilters}
+        onClear={clearFilters}
+      >
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-full sm:w-[160px]">
             <SelectValue placeholder="Estado" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos</SelectItem>
+            <SelectItem value="all">Todos los estados</SelectItem>
             <SelectItem value="active">Activas</SelectItem>
             <SelectItem value="paused">Pausadas</SelectItem>
             <SelectItem value="cancelled">Canceladas</SelectItem>
           </SelectContent>
         </Select>
-      </div>
+        <Select value={cycleFilter} onValueChange={setCycleFilter}>
+          <SelectTrigger className="w-full sm:w-[150px]">
+            <SelectValue placeholder="Ciclo" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos los ciclos</SelectItem>
+            <SelectItem value="monthly">Mensual</SelectItem>
+            <SelectItem value="annual">Anual</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={renewalFilter}
+          onValueChange={(v) => setRenewalFilter(v as "all" | "soon")}
+        >
+          <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectValue placeholder="Renovación" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas las renovaciones</SelectItem>
+            <SelectItem value="soon">Próximas / vencidas</SelectItem>
+          </SelectContent>
+        </Select>
+      </FilterBar>
 
       {/* Tabla */}
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 size={24} className="animate-spin text-gold" />
-        </div>
-      ) : filtered.length === 0 ? (
-        <EmptyState
-          icon={Wrench}
-          title="Sin suscripciones"
-          description={
-            subscriptions.length === 0
-              ? "Registra tu primera suscripcion."
-              : "No se encontraron suscripciones con los filtros aplicados."
-          }
-        >
-          {subscriptions.length === 0 && (
-            <Button className="mt-2" onClick={openCreate}>
+      <DataTable
+        data={filtered}
+        columns={columns}
+        rowKey={(s) => s.id}
+        onRowClick={openEdit}
+        isFiltered={hasActiveFilters}
+        pageSize={25}
+        showFooter
+        empty={{
+          icon: Wrench,
+          title: "Sin suscripciones",
+          description:
+            "Registra tu primera suscripción para llevar el control de costos.",
+          action: (
+            <Button onClick={openCreate}>
               <Plus size={16} className="mr-1.5" />
-              Nueva suscripcion
+              Nueva suscripción
             </Button>
-          )}
-        </EmptyState>
-      ) : (
-        <div className="bg-card rounded-lg border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-cream hover:bg-cream">
-                  <TableHead className="text-xs font-semibold text-muted-foreground">Herramienta</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground hidden md:table-cell">Categoria</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground text-right">Costo mensual</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground hidden sm:table-cell">Ciclo</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground hidden lg:table-cell">Proxima renovacion</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground">Estado</TableHead>
-                  <TableHead className="text-xs font-semibold text-muted-foreground text-right">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((sub) => (
-                  <TableRow
-                    key={sub.id}
-                    className="hover:bg-cream-dark/50 transition-colors cursor-pointer"
-                    onClick={() => openEdit(sub)}
-                  >
-                    <TableCell>
-                      <p className="text-sm font-medium">{sub.tool_name}</p>
-                      <p className="text-xs text-muted-foreground md:hidden">
-                        {sub.category || "—"}
-                      </p>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground hidden md:table-cell">
-                      {sub.category || "—"}
-                    </TableCell>
-                    <TableCell className="text-sm text-right font-semibold tabular-nums">
-                      {formatCOP(sub.monthly_cost)}
-                    </TableCell>
-                    <TableCell className="text-sm hidden sm:table-cell">
-                      {CYCLE_LABELS[sub.billing_cycle] || sub.billing_cycle}
-                    </TableCell>
-                    <TableCell className="text-sm hidden lg:table-cell">
-                      {formatDateShort(sub.next_renewal_date)}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={sub.status as "active" | "paused" | "cancelled"} />
-                    </TableCell>
-                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openEdit(sub)}
-                      >
-                        <Pencil size={14} className="mr-1" />
-                        Editar
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Footer */}
-          <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-cream text-xs text-muted-foreground">
-            <span>
-              {filtered.length} suscripcion{filtered.length !== 1 ? "es" : ""}
-            </span>
-            <span className="font-semibold text-foreground tabular-nums">
-              Total mensual: {formatCOP(filteredTotal)}
-            </span>
-          </div>
-        </div>
-      )}
+          ),
+        }}
+      />
 
       {/* Dialog */}
       <SubscriptionFormDialog
@@ -266,6 +436,14 @@ export default function HerramientasPage() {
         subscription={selectedSub}
         onCompleted={fetchSubscriptions}
       />
-    </div>
+    </PageShell>
+  )
+}
+
+export default function HerramientasPage() {
+  return (
+    <Suspense fallback={<PageSkeleton stats={4} rows={8} cols={6} />}>
+      <HerramientasPageInner />
+    </Suspense>
   )
 }
